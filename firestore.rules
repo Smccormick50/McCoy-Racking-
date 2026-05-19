@@ -1,0 +1,20 @@
+// Firestore security rules for the Racking Inventory site.
+// Paste this into: Firebase Console → Firestore Database → Rules → Publish
+//
+// Current setup: "Anyone with the link can read/write."
+// This matches your choice of no-login access.
+//
+// IF YOU EVER WANT TO LOCK IT DOWN:
+//   - Switch on Firebase Authentication (Email/Password)
+//   - Change "allow read, write: if true;" to:
+//       "allow read, write: if request.auth != null;"
+//   - Tell me and I'll add a login screen to the site.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /parts/{partId}   { allow read, write: if true; }
+    match /invoices/{invId} { allow read, write: if true; }
+    match /meta/{docId}     { allow read, write: if true; }
+  }
+}
