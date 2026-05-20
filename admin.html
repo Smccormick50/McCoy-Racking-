@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mc Racking — Admin</title>
+
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f3a2a">
+
+  <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Password gate (shown first; main content hidden until correct password) -->
+  <div id="passwordGate" class="password-gate">
+    <div class="password-card">
+      <img src="mc-logo.png" alt="" class="password-logo">
+      <h1>Admin Access</h1>
+      <p>Enter the admin password to continue.</p>
+      <form id="passwordForm">
+        <input id="passwordInput" type="password" placeholder="Password" autocomplete="off" autofocus>
+        <button type="submit">Unlock</button>
+      </form>
+      <p id="passwordError" class="muted" style="color:#fca5a5;min-height:18px;"></p>
+      <a href="index.html" class="back-link">← Back to main site</a>
+    </div>
+  </div>
+
+  <!-- Main admin content (hidden until unlocked) -->
+  <div id="adminApp" style="display:none;">
+    <header>
+      <div class="brand">
+        <img src="mc-logo.png" alt="Mc Racking" class="brand-logo">
+        <div class="brand-text">
+          <h1>Mc Racking — Admin</h1>
+          <p>Manage parts, users, locations, and view the audit log.</p>
+        </div>
+      </div>
+      <div class="user-field">
+        <label for="adminUserName">Admin User</label>
+        <select id="adminUserName" required>
+          <option value="">— Select your name —</option>
+        </select>
+        <div class="header-actions">
+          <span id="connectionStatus" class="connection-status">Connecting...</span>
+          <a href="index.html" class="admin-link">← Back to Site</a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <!-- Tab switcher -->
+      <nav class="admin-tabs">
+        <button class="tab-btn active" data-tab="parts">Parts / Inventory</button>
+        <button class="tab-btn" data-tab="users">Users</button>
+        <button class="tab-btn" data-tab="locations">Store Locations</button>
+        <button class="tab-btn" data-tab="recovery">Recovery</button>
+        <button class="tab-btn" data-tab="export">Export</button>
+        <button class="tab-btn" data-tab="audit">Audit Log</button>
+      </nav>
+
+      <!-- PARTS tab -->
+      <section id="tab-parts" class="tab-panel active">
+        <div class="panel">
+          <h2>Add New Part</h2>
+          <form id="addPartForm" class="grid-form">
+            <label>
+              Racking Type
+              <input id="newPartRackingType" type="text" placeholder="e.g. Pallet Rack" required>
+            </label>
+            <label class="wide">
+              Item / Part Name
+              <input id="newPartName" type="text" placeholder="e.g. 6&quot; x 9' Beam Green" required>
+            </label>
+            <label>
+              Starting Quantity
+              <input id="newPartStartingQty" type="number" min="0" step="1" value="0" required>
+            </label>
+            <label>
+              Cost Each
+              <input id="newPartCost" type="number" min="0" step="0.01" value="0" required>
+            </label>
+            <label>
+              Low Stock Threshold
+              <input id="newPartThreshold" type="number" min="0" step="1" value="5" required>
+            </label>
+            <button type="submit">Add Part</button>
+          </form>
+        </div>
+
+        <div class="panel">
+          <h2>All Parts <span class="live-badge">Live</span></h2>
+          <p class="muted">Click any value in the table to edit it. Changes save automatically. Use the <strong>Delete</strong> button on the right to remove a part.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Racking Type</th>
+                  <th>Item / Part</th>
+                  <th>Starting Qty</th>
+                  <th>Current Qty</th>
+                  <th>Cost Each</th>
+                  <th>Low Stock Threshold</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="adminPartsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- USERS tab -->
+      <section id="tab-users" class="tab-panel">
+        <div class="panel">
+          <h2>Add User</h2>
+          <form id="addUserForm" class="grid-form">
+            <label class="wide">
+              Full Name
+              <input id="newUserName" type="text" placeholder="e.g. Jane Doe" required>
+            </label>
+            <button type="submit">Add User</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>All Users</h2>
+          <p class="muted">These names appear in the User dropdown on the main site.</p>
+          <ul id="adminUsersList" class="admin-list"></ul>
+        </div>
+      </section>
+
+      <!-- LOCATIONS tab -->
+      <section id="tab-locations" class="tab-panel">
+        <div class="panel">
+          <h2>Add Store Location</h2>
+          <form id="addLocationForm" class="grid-form">
+            <label class="wide">
+              Store / Location
+              <input id="newLocationName" type="text" placeholder="e.g. 999 New Store" required>
+            </label>
+            <button type="submit">Add Location</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>All Store Locations</h2>
+          <p class="muted">These appear in the Store / Location dropdown on the invoice form.</p>
+          <ul id="adminLocationsList" class="admin-list"></ul>
+        </div>
+      </section>
+
+      <!-- RECOVERY tab -->
+      <section id="tab-recovery" class="tab-panel">
+        <div class="panel">
+          <h2>Recovery <span class="live-badge">Live</span></h2>
+          <p class="muted">Last 10 deleted invoices and parts. Click <strong>Restore</strong> to bring one back. Older deletions are permanently removed.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Deleted At</th>
+                  <th>Type</th>
+                  <th>Identifier</th>
+                  <th>Deleted By</th>
+                  <th>Summary</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="recoveryBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- EXPORT tab -->
+      <section id="tab-export" class="tab-panel">
+        <div class="panel">
+          <h2>Export to Excel</h2>
+          <p class="muted">Download spreadsheets of your live data. Files open in Excel, Google Sheets, or Numbers.</p>
+
+          <div class="export-grid">
+            <div class="export-card">
+              <h3>Inventory</h3>
+              <p class="muted">All parts with current quantities, costs, values, and stock status.</p>
+              <p class="export-count"><strong id="exportInventoryCount">0</strong> parts ready</p>
+              <button id="exportInventoryBtn">Download Inventory .xlsx</button>
+            </div>
+
+            <div class="export-card">
+              <h3>Invoices</h3>
+              <p class="muted">All invoices with one row per line item, plus a summary sheet.</p>
+              <p class="export-count"><strong id="exportInvoicesCount">0</strong> invoices ready</p>
+              <button id="exportInvoicesBtn">Download Invoices .xlsx</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AUDIT tab -->
+      <section id="tab-audit" class="tab-panel">
+        <div class="panel">
+          <h2>Audit Log <span class="live-badge">Live</span></h2>
+          <p class="muted">Every admin change recorded here. Newest first.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Admin</th>
+                  <th>Action</th>
+                  <th>Target</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="auditBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <div id="adminMessage" class="message"></div>
+    </main>
+
+    <footer>
+      <p>Mc Racking Admin · Powered by Firebase · Live across all devices</p>
+    </footer>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+
+  <!-- SheetJS for Excel export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- Config + seed data (used only for first-run seeding) -->
+  <script src="firebase-config.js"></script>
+  <script src="data.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>
