@@ -1,0 +1,86 @@
+// Firestore security rules for Mc Racking.
+//
+// Auth model:
+//  - All users sign in with email/password (created manually in Firebase Console).
+//  - Each user has a Firestore doc at users/{uid} with { email, displayName, role }
+//    where role is either "warehouse" or "admin".
+//  - Admins have full read/write. Warehouse users can:
+//      - Read everything
+//      - Create invoices and movements
+//      - Update part quantities (so creating/editing an invoice can deduct stock)
+//      - Increment the invoice counter
+//    Warehouse users CANNOT delete invoices, edit parts, or change settings.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userDoc().role == "admin";
+    }
+
+    function onlyQuantityChange() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(['currentQuantity']);
+    }
+
+    // User profiles. Each user can read their own; admins can read/write all.
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Parts: anyone signed in can read; only admins create/delete/rename.
+    // Warehouse users can update ONLY the currentQuantity field (so invoices can deduct).
+    match /parts/{partId} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (signedIn() && onlyQuantityChange());
+    }
+
+    // Invoices: signed-in users can create and update (for edits + lock toggling).
+    // Only admins can delete.
+    match /invoices/{invId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn();
+      allow delete: if isAdmin();
+    }
+
+    // Meta (invoice counter): signed-in users can read and update (counter increment).
+    match /meta/{docId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn();
+      allow delete: if isAdmin();
+    }
+
+    // Settings (users list, locations): only admins write.
+    match /settings/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // Audit log: anyone signed in can append (so warehouse invoice deletes get logged).
+    // Only admins can modify/remove past entries.
+    match /audit_log/{entryId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // Recovery log (recently-deleted invoices/parts).
+    match /deletions/{entryId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if isAdmin();
+    }
+  }
+}

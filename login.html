@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mc Racking — Sign In</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f3a2a">
+  <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="auth-overlay">
+    <!-- SIGN-IN VIEW -->
+    <div class="auth-card" id="signInView">
+      <img src="mc-logo.png" alt="" class="auth-logo">
+      <h1>Mc Racking</h1>
+      <p class="muted">Sign in with your email and password.</p>
+
+      <form id="authForm">
+        <label class="auth-label">
+          Email
+          <input id="authEmail" type="email" autocomplete="email" required>
+        </label>
+        <label class="auth-label">
+          Password
+          <input id="authPassword" type="password" autocomplete="current-password" required minlength="6">
+        </label>
+        <button type="submit" id="authSubmit">Sign In</button>
+      </form>
+
+      <p id="authError" class="auth-error"></p>
+
+      <p class="auth-switch" style="margin-top:14px;">
+        <a href="#" id="forgotPasswordLink">Forgot password?</a>
+      </p>
+
+      <p class="muted" style="font-size:12px;margin-top:18px;">Don't have an account? Contact your administrator.</p>
+    </div>
+
+    <!-- FORGOT PASSWORD VIEW (hidden by default) -->
+    <div class="auth-card" id="resetView" style="display:none;">
+      <img src="mc-logo.png" alt="" class="auth-logo">
+      <h1>Reset Password</h1>
+      <p class="muted">Enter your email address. We'll send you a link to set a new password.</p>
+
+      <form id="resetForm">
+        <label class="auth-label">
+          Email
+          <input id="resetEmail" type="email" autocomplete="email" required>
+        </label>
+        <button type="submit" id="resetSubmit">Send Reset Link</button>
+      </form>
+
+      <p id="resetMessage" class="auth-error"></p>
+
+      <p class="auth-switch" style="margin-top:14px;">
+        <a href="#" id="backToSignInLink">← Back to sign in</a>
+      </p>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="login.js"></script>
+</body>
+</html>
