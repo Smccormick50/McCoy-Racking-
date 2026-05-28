@@ -5,9 +5,12 @@ let adminState = {
   parts: [],
   users: [],
   locations: [],
+  trucks: [],
+  truckInventory: [],
   invoices: [],
   auditLog: [],
-  deletions: []
+  deletions: [],
+  meta: null
 };
 
 // ---------- Helpers --------------------------------------------------------
@@ -112,6 +115,36 @@ function attachAdminListeners() {
       .filter(loc => loc.name)
       .sort((a, b) => a.name.localeCompare(b.name));
     renderLocationsList();
+  });
+
+  db.collection("settings").doc("trucks").onSnapshot(doc => {
+    const list = (doc.exists && Array.isArray(doc.data().list)) ? doc.data().list.slice() : [];
+    adminState.trucks = list
+      .map(t => (typeof t === "string"
+        ? { name: t, driver: "", notes: "" }
+        : Object.assign({ name: "", driver: "", notes: "" }, t)))
+      .filter(t => t.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    renderTrucksList();
+    renderAdminTruckInventory();
+  });
+
+  // Live listener: truck_inventory (for the Truck Inventory admin tab)
+  db.collection("truck_inventory").onSnapshot(snap => {
+    adminState.truckInventory = [];
+    snap.forEach(d => adminState.truckInventory.push(Object.assign({ id: d.id }, d.data())));
+    adminState.truckInventory.sort((a, b) =>
+      (a.truck || "").localeCompare(b.truck || "") ||
+      (a.rackingType || "").localeCompare(b.rackingType || "") ||
+      (a.partName || "").localeCompare(b.partName || ""));
+    renderAdminTruckInventory();
+  }, err => {
+    console.error("Truck inventory admin listener error:", err);
+  });
+
+  // Live listener: meta (invoice counter, for damage invoice numbering)
+  db.collection("meta").doc("counters").onSnapshot(doc => {
+    adminState.meta = doc.exists ? doc.data() : null;
   });
 
   db.collection("audit_log").orderBy("timestamp", "desc").limit(500).onSnapshot(snap => {
@@ -502,6 +535,449 @@ async function importDefaultLocations() {
   }
 }
 
+
+// ---------- TRUCKS tab -----------------------------------------------------
+
+function renderTrucksList() {
+  const body = qs("adminTrucksBody");
+  if (!body) {
+    // Old element fallback
+    const ul = qs("adminTrucksList");
+    if (ul) ul.innerHTML = `<li class="muted">Refresh the page to see the new editable trucks table.</li>`;
+    return;
+  }
+  if (!adminState.trucks.length) {
+    body.innerHTML = `<tr><td colspan="4" class="muted" style="text-align:center;padding:20px;">No trucks yet. Add one above.</td></tr>`;
+    return;
+  }
+  body.innerHTML = adminState.trucks.map(t => `
+    <tr data-truck-name="${escapeHtml(t.name)}">
+      <td><strong>${escapeHtml(t.name)}</strong></td>
+      <td><input class="cell-edit truck-field" data-field="driver" type="text" value="${escapeHtml(t.driver || "")}" placeholder="—"></td>
+      <td><input class="cell-edit truck-field" data-field="notes"  type="text" value="${escapeHtml(t.notes || "")}"  placeholder="—"></td>
+      <td><button type="button" class="danger" data-truck="${escapeHtml(t.name)}">Remove</button></td>
+    </tr>
+  `).join("");
+
+  body.querySelectorAll("tr[data-truck-name]").forEach(tr => {
+    const truckName = tr.dataset.truckName;
+    tr.querySelectorAll("input.truck-field").forEach(inp => {
+      inp.addEventListener("change", () => saveTruckField(truckName, inp.dataset.field, inp));
+    });
+    const removeBtn = tr.querySelector("button[data-truck]");
+    if (removeBtn) removeBtn.addEventListener("click", () => removeTruck(truckName));
+  });
+}
+
+async function saveTruckField(truckName, field, input) {
+  if (!requireAdminUser()) {
+    const truck = adminState.trucks.find(t => t.name === truckName);
+    if (truck) input.value = truck[field] || "";
+    return;
+  }
+  const truck = adminState.trucks.find(t => t.name === truckName);
+  if (!truck) return;
+  const oldValue = truck[field] || "";
+  const newValue = String(input.value).trim();
+  if (newValue === oldValue) return;
+
+  const newList = adminState.trucks.map(t =>
+    t.name === truckName ? Object.assign({}, t, { [field]: newValue }) : t
+  );
+  try {
+    await db.collection("settings").doc("trucks").set({ list: newList });
+    await recordAudit("EDIT_TRUCK", truckName, { truck: truckName, field, before: oldValue, after: newValue });
+    showAdminMessage(`Saved ${field} for ${truckName}`, false);
+  } catch (err) {
+    console.error("Save truck field failed:", err);
+    showAdminMessage("Save failed: " + err.message, true);
+    input.value = oldValue;
+  }
+}
+
+async function addTruck(e) {
+  e.preventDefault();
+  if (!requireAdminUser()) return;
+  const name = qs("newTruckName").value.trim();
+  if (!name) return;
+  if (adminState.trucks.some(t => t.name === name)) {
+    showAdminMessage("That truck is already on the list.", true);
+    return;
+  }
+  const newTruck = {
+    name,
+    driver: (qs("newTruckDriver") && qs("newTruckDriver").value || "").trim(),
+    notes:  (qs("newTruckNotes")  && qs("newTruckNotes").value  || "").trim()
+  };
+  const newList = adminState.trucks.concat([newTruck]).sort((a, b) => a.name.localeCompare(b.name));
+  try {
+    await db.collection("settings").doc("trucks").set({ list: newList });
+    await recordAudit("ADD_TRUCK", name, { truck: name });
+    qs("addTruckForm").reset();
+    showAdminMessage(`Added truck: ${name}`, false);
+  } catch (err) {
+    console.error("Add truck failed:", err);
+    showAdminMessage("Add failed: " + err.message, true);
+  }
+}
+
+async function removeTruck(name) {
+  if (!requireAdminUser()) return;
+  if (!confirm(`Remove "${name}" from the truck dropdown?\n\nExisting truck inventory and invoices will still keep this truck name. If this truck still has inventory, move or use that inventory before removing it from the active list.`)) return;
+  const previousList = adminState.trucks.slice();
+  const newList = adminState.trucks.filter(t => t.name !== name);
+  try {
+    await db.collection("settings").doc("trucks").set({ list: newList });
+    await recordAudit("REMOVE_TRUCK", name, { truck: name, previousList });
+    showAdminMessage(`Removed truck: ${name}`, false);
+  } catch (err) {
+    console.error("Remove truck failed:", err);
+    showAdminMessage("Remove failed: " + err.message, true);
+  }
+}
+
+// ---------- TRUCK INVENTORY tab (admin) ------------------------------------
+
+const DAMAGE_LOCATION_NAME = "730 Store Development";
+
+function renderAdminTruckInventory() {
+  const container = qs("adminTruckInvContainer");
+  if (!container) return;
+
+  // Build map: truckName -> rows[]
+  const byTruck = new Map();
+  for (const row of adminState.truckInventory) {
+    if (Number(row.quantity || 0) <= 0) continue;
+    const name = row.truck || "";
+    if (!byTruck.has(name)) byTruck.set(name, []);
+    byTruck.get(name).push(row);
+  }
+
+  // All known trucks (settings + any unknown ones from inventory)
+  const allTruckNames = new Set();
+  for (const t of adminState.trucks) allTruckNames.add(t.name);
+  for (const name of byTruck.keys()) allTruckNames.add(name);
+
+  if (!allTruckNames.size) {
+    container.innerHTML = `<p class="muted">No trucks set up yet. Add trucks in the Trucks tab first.</p>`;
+    return;
+  }
+
+  const truckNames = [...allTruckNames].sort((a, b) => a.localeCompare(b));
+
+  container.innerHTML = truckNames.map(truckName => {
+    const items = (byTruck.get(truckName) || []).slice().sort((a, b) =>
+      (a.rackingType || "").localeCompare(b.rackingType || "") ||
+      (a.partName || "").localeCompare(b.partName || ""));
+
+    const truckInfo = adminState.trucks.find(t => t.name === truckName) || { driver: "", notes: "" };
+    const totalQty = items.reduce((s, r) => s + Number(r.quantity || 0), 0);
+    const totalValue = items.reduce((s, r) => s + Number(r.quantity || 0) * Number(r.costEach || 0), 0);
+
+    const header = truckInfo.driver
+      ? `<strong>${escapeHtml(truckName)}</strong> <span class="muted">— ${escapeHtml(truckInfo.driver)}</span>`
+      : `<strong>${escapeHtml(truckName)}</strong>`;
+
+    if (!items.length) {
+      return `
+        <div class="truck-card">
+          <h3 style="margin:0 0 4px;">${header}</h3>
+          <p class="muted" style="margin:0;">Empty — no inventory currently loaded.</p>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="truck-card">
+        <h3 style="margin:0 0 4px;">${header}</h3>
+        <p class="muted" style="margin:0 0 8px;">${totalQty} item${totalQty === 1 ? "" : "s"} on board · <strong>${money(totalValue)}</strong> total value</p>
+        <div class="table-wrap">
+          <table class="truck-inv-table">
+            <thead>
+              <tr>
+                <th>Racking Type</th>
+                <th>Item / Part</th>
+                <th style="text-align:right;">Qty</th>
+                <th style="text-align:right;">Cost</th>
+                <th style="text-align:right;">Value</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map(r => {
+                const qty = Number(r.quantity || 0);
+                const cost = Number(r.costEach || 0);
+                const safeTruck = escapeHtml(truckName);
+                const safePartId = escapeHtml(r.partId || "");
+                return `
+                  <tr data-truck="${safeTruck}" data-part="${safePartId}">
+                    <td>${escapeHtml(r.rackingType || "")}</td>
+                    <td>${escapeHtml(r.partName || "")}</td>
+                    <td style="text-align:right;">
+                      <input class="cell-edit truck-qty-edit" type="number" min="0" step="1" value="${qty}" style="width:70px;text-align:right;">
+                    </td>
+                    <td style="text-align:right;">${money(cost)}</td>
+                    <td style="text-align:right;">${money(qty * cost)}</td>
+                    <td>
+                      <div class="action-buttons">
+                        <button type="button" class="secondary" data-action="return">Return to Warehouse</button>
+                        ${currentUserProfile && currentUserProfile.isAdmin
+                          ? `<button type="button" class="danger" data-action="damage">Invoice Damage</button>`
+                          : ""}
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  // Wire up edit + action buttons
+  container.querySelectorAll("tr[data-truck]").forEach(tr => {
+    const truckName = tr.dataset.truck;
+    const partId = tr.dataset.part;
+    const qtyInput = tr.querySelector("input.truck-qty-edit");
+    if (qtyInput) {
+      qtyInput.addEventListener("change", () => saveTruckInventoryQty(truckName, partId, qtyInput));
+    }
+    const returnBtn = tr.querySelector("button[data-action='return']");
+    if (returnBtn) returnBtn.addEventListener("click", () => returnTruckItemToWarehouse(truckName, partId));
+    const damageBtn = tr.querySelector("button[data-action='damage']");
+    if (damageBtn) damageBtn.addEventListener("click", () => invoiceTruckDamage(truckName, partId));
+  });
+}
+
+// Manually adjust the quantity on a truck. Logs an adjustment movement.
+async function saveTruckInventoryQty(truckName, partId, input) {
+  if (!requireAdminUser()) {
+    input.value = getTruckRow(truckName, partId)?.quantity ?? 0;
+    return;
+  }
+  const row = getTruckRow(truckName, partId);
+  if (!row) return;
+  const oldQty = Number(row.quantity || 0);
+  const newQty = Math.max(0, Math.floor(Number(input.value || 0)));
+  if (newQty === oldQty) return;
+  if (!confirm(`Adjust ${row.partName} on ${truckName}?\n\nFrom ${oldQty} to ${newQty}\n\nThis is a manual adjustment — warehouse inventory will NOT change. Use "Return to Warehouse" if you want to move stock back instead.`)) {
+    input.value = oldQty;
+    return;
+  }
+  const user = getAdminUser();
+  try {
+    const now = firebase.firestore.FieldValue.serverTimestamp();
+    const truckRef = db.collection("truck_inventory").doc(row.id);
+    await truckRef.set({ quantity: newQty, updatedAt: now }, { merge: true });
+    await db.collection("inventory_movements").add({
+      timestamp: now,
+      type: "TRUCK_ADJUSTMENT",
+      truck: truckName,
+      partId,
+      partName: row.partName || "",
+      rackingType: row.rackingType || "",
+      quantityChange: newQty - oldQty,
+      truckBeforeQuantity: oldQty,
+      truckAfterQuantity: newQty,
+      user
+    });
+    await recordAudit("ADJUST_TRUCK_QTY", `${truckName} / ${row.partName}`, {
+      truck: truckName, partId, before: oldQty, after: newQty
+    });
+    showAdminMessage(`Adjusted ${row.partName} on ${truckName}: ${oldQty} → ${newQty}`, false);
+  } catch (err) {
+    console.error("Adjust truck qty failed:", err);
+    showAdminMessage("Adjustment failed: " + err.message, true);
+    input.value = oldQty;
+  }
+}
+
+function getTruckRow(truckName, partId) {
+  return adminState.truckInventory.find(r => r.truck === truckName && r.partId === partId);
+}
+
+// Move qty from a truck back to warehouse stock (warehouse currentQuantity goes up).
+async function returnTruckItemToWarehouse(truckName, partId) {
+  const row = getTruckRow(truckName, partId);
+  if (!row) return;
+  const currentQty = Number(row.quantity || 0);
+  if (currentQty <= 0) {
+    showAdminMessage("Nothing on the truck to return.", true);
+    return;
+  }
+  const answer = prompt(
+    `Return ${row.partName} from ${truckName} to warehouse.\n\nCurrently on truck: ${currentQty}\n\nHow many to return? (Enter a number from 1 to ${currentQty}, or 0 / cancel to abort.)`,
+    String(currentQty)
+  );
+  if (answer === null) return;
+  const qtyReturn = Math.floor(Number(answer));
+  if (!qtyReturn || qtyReturn <= 0) return;
+  if (qtyReturn > currentQty) {
+    showAdminMessage(`Can't return more than what's on the truck (${currentQty}).`, true);
+    return;
+  }
+  const user = getAdminUser();
+  try {
+    await db.runTransaction(async tx => {
+      const now = firebase.firestore.FieldValue.serverTimestamp();
+      const partRef = db.collection("parts").doc(partId);
+      const truckRef = db.collection("truck_inventory").doc(row.id);
+
+      // === reads
+      const partDoc = await tx.get(partRef);
+      const truckDoc = await tx.get(truckRef);
+      if (!partDoc.exists) throw new Error("Part no longer exists.");
+      if (!truckDoc.exists) throw new Error("Truck inventory entry no longer exists.");
+      const part = partDoc.data();
+      const warehouseBefore = Number(part.currentQuantity || 0);
+      const truckBefore = Number(truckDoc.data().quantity || 0);
+      if (truckBefore < qtyReturn) throw new Error(`Truck only has ${truckBefore} now (someone else may have changed it). Try again.`);
+
+      // === writes
+      tx.update(partRef, { currentQuantity: warehouseBefore + qtyReturn, updatedAt: now });
+      tx.set(truckRef, { quantity: truckBefore - qtyReturn, updatedAt: now }, { merge: true });
+      tx.set(db.collection("inventory_movements").doc(), {
+        timestamp: now,
+        type: "TRUCK_TO_WAREHOUSE",
+        truck: truckName,
+        partId,
+        partName: part.name || "",
+        rackingType: part.rackingType || "",
+        quantityChange: qtyReturn,
+        beforeQuantity: warehouseBefore,
+        afterQuantity: warehouseBefore + qtyReturn,
+        truckBeforeQuantity: truckBefore,
+        truckAfterQuantity: truckBefore - qtyReturn,
+        user
+      });
+      tx.set(db.collection("audit_log").doc(), {
+        timestamp: now,
+        admin: user,
+        action: "RETURN_TO_WAREHOUSE",
+        target: `${truckName} / ${part.name || partId}`,
+        details: { truck: truckName, partId, qtyReturned: qtyReturn }
+      });
+    });
+    showAdminMessage(`Returned ${qtyReturn} × ${row.partName} from ${truckName} to warehouse.`, false);
+  } catch (err) {
+    console.error("Return to warehouse failed:", err);
+    showAdminMessage("Return failed: " + err.message, true);
+  }
+}
+
+// Write off damaged items from a truck. Creates a real invoice billed to
+// "730 Store Development", deducts from truck inventory, and flags it as a damage invoice.
+async function invoiceTruckDamage(truckName, partId) {
+  if (!requireAdminUser()) return;
+  const row = getTruckRow(truckName, partId);
+  if (!row) return;
+  const currentQty = Number(row.quantity || 0);
+  if (currentQty <= 0) {
+    showAdminMessage("Nothing on the truck to write off.", true);
+    return;
+  }
+  const answer = prompt(
+    `Write off damaged ${row.partName} from ${truckName}.\n\nCurrently on truck: ${currentQty}\n\nHow many are damaged? (Enter a number from 1 to ${currentQty}.)\n\nThis creates a DAMAGE WRITE-OFF invoice billed to "${DAMAGE_LOCATION_NAME}".`,
+    "1"
+  );
+  if (answer === null) return;
+  const qtyDamaged = Math.floor(Number(answer));
+  if (!qtyDamaged || qtyDamaged <= 0) return;
+  if (qtyDamaged > currentQty) {
+    showAdminMessage(`Can't write off more than what's on the truck (${currentQty}).`, true);
+    return;
+  }
+  const reason = prompt(`(Optional) Brief reason for the damage write-off:`, "Damaged in transit");
+  if (reason === null) return; // user cancelled
+  if (!confirm(`Confirm DAMAGE WRITE-OFF\n\nTruck: ${truckName}\nPart: ${row.partName}\nQuantity: ${qtyDamaged}\nValue: ${money(qtyDamaged * Number(row.costEach || 0))}\nBilled to: ${DAMAGE_LOCATION_NAME}\nReason: ${reason || "(none)"}\n\nProceed?`)) return;
+
+  const user = getAdminUser();
+  const damageLocation = adminState.locations.find(l => l.name === DAMAGE_LOCATION_NAME);
+  const locationDetails = damageLocation
+    ? { name: damageLocation.name, phone: damageLocation.phone || "", address: damageLocation.address || "", city: damageLocation.city || "", state: damageLocation.state || "", zip: damageLocation.zip || "" }
+    : { name: DAMAGE_LOCATION_NAME, phone: "", address: "", city: "", state: "", zip: "" };
+
+  try {
+    const result = await db.runTransaction(async tx => {
+      const now = firebase.firestore.FieldValue.serverTimestamp();
+      const counterRef = db.collection("meta").doc("counters");
+      const truckRef = db.collection("truck_inventory").doc(row.id);
+
+      // === reads
+      const counterDoc = await tx.get(counterRef);
+      const truckDoc = await tx.get(truckRef);
+      const current = counterDoc.exists ? Number(counterDoc.data().nextInvoiceNumber || 10001) : 10001;
+      if (!truckDoc.exists) throw new Error("Truck inventory entry no longer exists.");
+      const truckBefore = Number(truckDoc.data().quantity || 0);
+      if (truckBefore < qtyDamaged) throw new Error(`Truck only has ${truckBefore} now (someone else may have changed it).`);
+      const cost = Number(truckDoc.data().costEach || 0);
+
+      const invoiceNumber = `INV-${current}`;
+      const invoiceRef = db.collection("invoices").doc(invoiceNumber);
+
+      const lineItem = {
+        rackingType: row.rackingType || "",
+        partId,
+        partName: row.partName || "",
+        quantityUsed: qtyDamaged,
+        costEach: cost,
+        total: qtyDamaged * cost
+      };
+      const total = lineItem.total;
+      const isoDate = new Date().toISOString().slice(0, 10);
+
+      // === writes
+      tx.set(counterRef, { nextInvoiceNumber: current + 1 }, { merge: true });
+      tx.set(truckRef, { quantity: truckBefore - qtyDamaged, updatedAt: now }, { merge: true });
+      tx.set(invoiceRef, {
+        invoiceNumber,
+        date: isoDate,
+        location: DAMAGE_LOCATION_NAME,
+        locationDetails,
+        truck: truckName,
+        user,
+        isDamageWriteOff: true,
+        damageReason: reason || "",
+        notes: reason ? `DAMAGE WRITE-OFF: ${reason}` : "DAMAGE WRITE-OFF",
+        lineItems: [lineItem],
+        total,
+        createdAt: now,
+        updatedAt: now
+      });
+      tx.set(db.collection("inventory_movements").doc(), {
+        timestamp: now,
+        type: "TRUCK_DAMAGE_WRITEOFF",
+        invoiceNumber,
+        truck: truckName,
+        partId,
+        partName: row.partName || "",
+        rackingType: row.rackingType || "",
+        quantityChange: -qtyDamaged,
+        truckBeforeQuantity: truckBefore,
+        truckAfterQuantity: truckBefore - qtyDamaged,
+        user,
+        location: DAMAGE_LOCATION_NAME,
+        reason
+      });
+      tx.set(db.collection("audit_log").doc(), {
+        timestamp: now,
+        admin: user,
+        action: "DAMAGE_WRITEOFF",
+        target: invoiceNumber,
+        details: { truck: truckName, partId, partName: row.partName, qty: qtyDamaged, value: total, reason }
+      });
+
+      return { invoiceNumber, total };
+    });
+    showAdminMessage(`Damage invoice ${result.invoiceNumber} created (${money(result.total)}).`, false);
+  } catch (err) {
+    console.error("Damage write-off failed:", err);
+    showAdminMessage("Damage write-off failed: " + err.message, true);
+  }
+}
+
 // ---------- RECOVERY tab ---------------------------------------------------
 
 function renderRecoveryTable() {
@@ -767,6 +1243,7 @@ function exportInvoicesToExcel() {
       "Last Edited": inv.lastEditedDate || "",
       "User": inv.user || "",
       "Location": inv.location || "",
+      "Truck": inv.truck || "",
       "Line Items": lines.length,
       "Total": Number(inv.total || 0)
     };
@@ -779,9 +1256,9 @@ function exportInvoicesToExcel() {
   const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
   wsSummary["!cols"] = [
     { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 18 },
-    { wch: 22 }, { wch: 10 }, { wch: 12 }
+    { wch: 22 }, { wch: 14 }, { wch: 10 }, { wch: 12 }
   ];
-  formatColumnAsCurrency(wsSummary, summaryRows.length, "G"); // Total
+  formatColumnAsCurrency(wsSummary, summaryRows.length, "H"); // Total
 
   // Sheet 2: Line Items (one row per line item across ALL invoices)
   const lineRows = [];
@@ -793,6 +1270,7 @@ function exportInvoicesToExcel() {
         "Date": inv.date || "",
         "User": inv.user || "",
         "Location": inv.location || "",
+        "Truck": inv.truck || "",
         "Racking Type": l.rackingType || "",
         "Item / Part": l.partName || "",
         "Qty Used": Number(l.quantityUsed || 0),
@@ -808,11 +1286,11 @@ function exportInvoicesToExcel() {
 
   const wsLines = XLSX.utils.json_to_sheet(lineRows);
   wsLines["!cols"] = [
-    { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+    { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 14 },
     { wch: 18 }, { wch: 50 }, { wch: 10 }, { wch: 11 }, { wch: 12 }
   ];
-  formatColumnAsCurrency(wsLines, lineRows.length, "H"); // Cost Each
-  formatColumnAsCurrency(wsLines, lineRows.length, "I"); // Line Total
+  formatColumnAsCurrency(wsLines, lineRows.length, "I"); // Cost Each
+  formatColumnAsCurrency(wsLines, lineRows.length, "J"); // Line Total
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, wsSummary, "Invoice Summary");
@@ -918,6 +1396,7 @@ function exportArchivedMonth(monthKey) {
       "Last Edited": inv.lastEditedDate || "",
       "User": inv.user || "",
       "Location": inv.location || "",
+      "Truck": inv.truck || "",
       "Line Items": lines.length,
       "Total": Number(inv.total || 0)
     };
@@ -928,9 +1407,9 @@ function exportArchivedMonth(monthKey) {
   const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
   wsSummary["!cols"] = [
     { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 18 },
-    { wch: 22 }, { wch: 10 }, { wch: 12 }
+    { wch: 22 }, { wch: 14 }, { wch: 10 }, { wch: 12 }
   ];
-  formatColumnAsCurrency(wsSummary, summaryRows.length, "G");
+  formatColumnAsCurrency(wsSummary, summaryRows.length, "H");
 
   const lineRows = [];
   for (const inv of sorted) {
@@ -941,6 +1420,7 @@ function exportArchivedMonth(monthKey) {
         "Date": inv.date || "",
         "User": inv.user || "",
         "Location": inv.location || "",
+        "Truck": inv.truck || "",
         "Racking Type": l.rackingType || "",
         "Item / Part": l.partName || "",
         "Qty Used": Number(l.quantityUsed || 0),
@@ -954,11 +1434,11 @@ function exportArchivedMonth(monthKey) {
   lineRows.push({ "Invoice #": "TOTAL", "Line Total": lineTotal });
   const wsLines = XLSX.utils.json_to_sheet(lineRows);
   wsLines["!cols"] = [
-    { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+    { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 14 },
     { wch: 18 }, { wch: 50 }, { wch: 10 }, { wch: 11 }, { wch: 12 }
   ];
-  formatColumnAsCurrency(wsLines, lineRows.length, "H");
   formatColumnAsCurrency(wsLines, lineRows.length, "I");
+  formatColumnAsCurrency(wsLines, lineRows.length, "J");
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, wsSummary, "Invoice Summary");
@@ -1011,6 +1491,8 @@ function renderAuditLog() {
       detailText = `User: ${escapeHtml(d.user || "")}`;
     } else if (entry.action === "ADD_LOCATION" || entry.action === "REMOVE_LOCATION") {
       detailText = `Location: ${escapeHtml(d.location || "")}`;
+    } else if (entry.action === "ADD_TRUCK" || entry.action === "REMOVE_TRUCK") {
+      detailText = `Truck: ${escapeHtml(d.truck || "")}`;
     } else {
       detailText = escapeHtml(JSON.stringify(d));
     }
@@ -1067,6 +1549,8 @@ async function startAdmin() {
   qs("addPartForm").addEventListener("submit", addNewPart);
   qs("addUserForm").addEventListener("submit", addUser);
   qs("addLocationForm").addEventListener("submit", addLocation);
+  const addTruckForm = qs("addTruckForm");
+  if (addTruckForm) addTruckForm.addEventListener("submit", addTruck);
 
   qs("exportInventoryBtn").addEventListener("click", exportInventoryToExcel);
   qs("exportInvoicesBtn").addEventListener("click", exportInvoicesToExcel);

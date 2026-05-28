@@ -1,14 +1,14 @@
 // Firebase configuration for Mc Racking.
-// Project: Mc Racking - Test
+// Project: Racking Inventory - Live
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCg1Ih-IbxcoPIhAc_7mzJF2bJ9WX0EMyw",
-  authDomain: "mc-racking---test.firebaseapp.com",
-  projectId: "mc-racking---test",
-  storageBucket: "mc-racking---test.firebasestorage.app",
-  messagingSenderId: "22203078980",
-  appId: "1:22203078980:web:6547d2250dc75a8d895f11",
-  measurementId: "G-43RX41YE28"
+  apiKey: "AIzaSyAycjbG9_bYYNieTUEqvTJxj4vEDDBBE2k",
+  authDomain: "racking-inventory-tracker.firebaseapp.com",
+  projectId: "racking-inventory-tracker",
+  storageBucket: "racking-inventory-tracker.firebasestorage.app",
+  messagingSenderId: "61331131085",
+  appId: "1:61331131085:web:054b3b2dc731d841da7784",
+  measurementId: "G-D1NTL7ZLH1"
 };
 
 firebase.initializeApp(firebaseConfig);

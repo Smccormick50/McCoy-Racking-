@@ -739,3 +739,52 @@ input.cell-edit:focus {
   padding: 8px 0;
 }
 .signed-in-as strong { color: #f5d116; }
+
+/* ===== Truck Inventory cards ===== */
+.truck-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #166b46;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.truck-card h3 {
+  color: #0f3a2a;
+}
+.truck-card .truck-inv-table {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 14px;
+}
+.truck-card .truck-inv-table th {
+  background: transparent;
+  color: #475569;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.truck-card .truck-inv-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.truck-card .truck-inv-table tr:last-child td {
+  border-bottom: 0;
+}
+
+
+/* DAMAGE WRITE-OFF badge on invoice rows */
+.damage-badge {
+  display: inline-block;
+  background: #b91c1c;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+

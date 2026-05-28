@@ -44,12 +44,48 @@
   <main>
     <section id="dashboard" class="dashboard"></section>
 
+
     <section class="panel">
-      <h2 id="usageHeading">Use Inventory & Create Invoice</h2>
+      <h2>Inventory Checkout: Warehouse → Truck</h2>
+      <p class="muted">Move material from warehouse inventory onto a truck. Warehouse quantity goes down and truck quantity goes up.</p>
+      <form id="checkoutForm" class="grid-form">
+        <label>
+          Truck
+          <select id="checkoutTruck" required></select>
+        </label>
+        <label>
+          Racking Type
+          <select id="checkoutRackingType" required></select>
+        </label>
+        <label>
+          Item / Part
+          <select id="checkoutPart" required></select>
+        </label>
+        <label>
+          Quantity to Load
+          <input id="checkoutQty" type="number" min="1" step="1" required>
+        </label>
+        <button id="checkoutButton" type="submit">Move to Truck</button>
+      </form>
+      <div id="checkoutMessage" class="message"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Truck Inventory</h2>
+      <p class="muted">What's currently loaded on each truck. Items deduct as invoices are created against that truck.</p>
+      <div id="truckInventoryContainer"></div>
+    </section>
+
+    <section class="panel">
+      <h2 id="usageHeading">Use Truck Inventory & Create Store Invoice</h2>
       <form id="usageForm" class="grid-form">
         <label>
           Store / Location
           <select id="location" required></select>
+        </label>
+        <label>
+          Truck Used
+          <select id="invoiceTruck" required></select>
         </label>
 
         <div class="wide full-width">
@@ -66,7 +102,7 @@
     </section>
 
     <section class="panel">
-      <h2>Current Inventory</h2>
+      <h2>Warehouse Inventory</h2>
       <div class="table-wrap">
         <table>
           <thead>
@@ -74,7 +110,7 @@
               <th>Racking Type</th>
               <th>Item / Part</th>
               <th>Starting Qty</th>
-              <th>Current Qty</th>
+              <th>Warehouse Qty</th>
               <th>Cost Each</th>
               <th>Current Value</th>
               <th>Status</th>
@@ -96,6 +132,7 @@
               <th>Date</th>
               <th>User</th>
               <th>Location</th>
+              <th>Truck</th>
               <th>Items</th>
               <th>Total</th>
               <th>Actions</th>

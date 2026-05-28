@@ -55,7 +55,7 @@ async function handleResetSubmit(e) {
   try {
     await auth.sendPasswordResetEmail(email);
     showResetMessage(
-      `Reset link sent. Check your email (and spam folder) for a message from "noreply@mc-racking---test.firebaseapp.com" and follow the link to set a new password.`,
+      `Reset link sent. Check your email (and spam folder) for a message from "noreply@racking-inventory-tracker.firebaseapp.com" and follow the link to set a new password.`,
       false
     );
     btn.textContent = "Sent ✓";

@@ -30,7 +30,7 @@ service cloud.firestore {
     }
 
     function onlyQuantityChange() {
-      return request.resource.data.diff(resource.data).changedKeys().hasOnly(['currentQuantity']);
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(['currentQuantity', 'updatedAt']);
     }
 
     // User profiles. Each user can read their own; admins can read/write all.
@@ -66,6 +66,19 @@ service cloud.firestore {
     match /settings/{docId} {
       allow read: if signedIn();
       allow write: if isAdmin();
+    }
+
+    // Truck inventory: checkout moves warehouse stock to trucks, invoices deduct from trucks.
+    match /truck_inventory/{docId} {
+      allow read, create, update: if signedIn();
+      allow delete: if isAdmin();
+    }
+
+    // Inventory movement history.
+    match /inventory_movements/{entryId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if isAdmin();
     }
 
     // Audit log: anyone signed in can append (so warehouse invoice deletes get logged).

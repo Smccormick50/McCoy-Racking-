@@ -39,6 +39,8 @@
       <button type="button" class="tab-btn active" data-tab="parts">Parts / Inventory</button>
       <button type="button" class="tab-btn" data-tab="users">Users</button>
       <button type="button" class="tab-btn" data-tab="locations">Store Locations</button>
+      <button type="button" class="tab-btn" data-tab="trucks">Trucks</button>
+      <button type="button" class="tab-btn" data-tab="truckInv">Truck Inventory</button>
         <button type="button" class="tab-btn" data-tab="recovery">Recovery</button>
         <button type="button" class="tab-btn" data-tab="export">Export</button>
         <button type="button" class="tab-btn" data-tab="archived">Archived Invoices</button>
@@ -169,6 +171,55 @@
               <tbody id="adminLocationsBody"></tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- TRUCKS tab -->
+      <section id="tab-trucks" class="tab-panel">
+        <div class="panel">
+          <h2>Add Truck</h2>
+          <form id="addTruckForm" class="grid-form">
+            <label>
+              Truck Name / Number
+              <input id="newTruckName" type="text" placeholder="e.g. Truck 4 or Unit 12" required>
+            </label>
+            <label>
+              Driver (optional)
+              <input id="newTruckDriver" type="text" placeholder="e.g. Carlos Garcia">
+            </label>
+            <label class="wide">
+              Notes (optional)
+              <input id="newTruckNotes" type="text" placeholder="e.g. Box truck, 26ft">
+            </label>
+            <button type="submit">Add Truck</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>All Trucks</h2>
+          <p class="muted">These appear in the Truck dropdowns on the main page for checkout and store invoices. Click any cell to edit.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Truck</th>
+                  <th>Driver</th>
+                  <th>Notes</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="adminTrucksBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- TRUCK INVENTORY tab -->
+      <section id="tab-truckInv" class="tab-panel">
+        <div class="panel">
+          <h2>Truck Inventory</h2>
+          <p class="muted">View and edit what's currently on each truck. Use <strong>Return to Warehouse</strong> to move items back to warehouse stock. Use <strong>Invoice Damage</strong> to write off damaged items (creates a damage invoice billed to 730 Store Development).</p>
+          <div id="adminTruckInvContainer"></div>
         </div>
       </section>
 

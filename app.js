@@ -10,6 +10,8 @@ let state = {
   users: [],
   parts: [],
   invoices: [],
+  trucks: [],
+  truckInventory: [],
   meta: { nextInvoiceNumber: 10001 }
 };
 
@@ -22,6 +24,8 @@ let initialInvoicesLoaded = false;
 let initialMetaLoaded = false;
 let initialLocationsLoaded = false;
 let initialUsersLoaded = false;
+let initialTrucksLoaded = false;
+let initialTruckInventoryLoaded = false;
 
 // ---------- Helpers --------------------------------------------------------
 
@@ -112,27 +116,44 @@ function escapeHtml(text) {
 // ---------- Firestore: initialization & seed -------------------------------
 
 async function seedPartsIfEmpty() {
-  // Check if the parts collection has any documents; if not, seed it from data.js
-  const snapshot = await db.collection("parts").limit(1).get();
-  if (!snapshot.empty) return;
+  // Make sure every default racking type and part from data.js exists.
+  // Older Firebase databases may already have some parts, so this now adds only missing defaults.
+  if (typeof STARTING_PARTS === "undefined" || !Array.isArray(STARTING_PARTS)) return;
 
-  console.log("Seeding parts collection from STARTING_PARTS...");
+  const existing = await db.collection("parts").get();
+  const existingIds = new Set();
+  const existingKeys = new Set();
+  existing.forEach(doc => {
+    const data = doc.data() || {};
+    existingIds.add(doc.id);
+    existingIds.add(data.id);
+    existingKeys.add(`${String(data.rackingType || "").trim().toLowerCase()}||${String(data.name || "").trim().toLowerCase()}`);
+  });
+
   const batch = db.batch();
+  let added = 0;
   STARTING_PARTS.forEach((part, index) => {
     const id = `part-${index + 1}`;
+    const key = `${String(part.rackingType || "").trim().toLowerCase()}||${String(part.name || "").trim().toLowerCase()}`;
+    if (existingIds.has(id) || existingKeys.has(key)) return;
+
     const ref = db.collection("parts").doc(id);
     batch.set(ref, {
       id,
       rackingType: part.rackingType,
-      name: part.name.trim(),
+      name: String(part.name || "").trim(),
       startingQuantity: Number(part.startingQuantity || 0),
       currentQuantity: Number(part.startingQuantity || 0),
       costEach: Number(part.costEach || 0),
       lowStockThreshold: 5
     });
+    added += 1;
   });
-  await batch.commit();
-  console.log("Seeded", STARTING_PARTS.length, "parts.");
+
+  if (added > 0) {
+    await batch.commit();
+    console.log("Added missing default parts:", added);
+  }
 }
 
 async function seedMetaIfMissing() {
@@ -159,6 +180,15 @@ async function seedUsersIfEmpty() {
     const seed = (typeof STARTING_USERS !== "undefined" ? STARTING_USERS : []);
     await ref.set({ list: seed });
     console.log("Seeded", seed.length, "users.");
+  }
+}
+
+async function seedTrucksIfEmpty() {
+  const ref = db.collection("settings").doc("trucks");
+  const doc = await ref.get();
+  if (!doc.exists) {
+    await ref.set({ list: ["Truck 1", "Truck 2", "Truck 3"] });
+    console.log("Seeded default trucks.");
   }
 }
 
@@ -239,16 +269,49 @@ function attachListeners() {
   }, err => {
     console.error("Users listener error:", err);
   });
+
+  // Live listener: settings/trucks
+  db.collection("settings").doc("trucks").onSnapshot(doc => {
+    if (doc.exists && Array.isArray(doc.data().list)) {
+      // Normalize: accept strings (old format) or objects (new format with driver/notes)
+      state.trucks = doc.data().list
+        .map(t => (typeof t === "string"
+          ? { name: t, driver: "", notes: "" }
+          : Object.assign({ name: "", driver: "", notes: "" }, t)))
+        .filter(t => t.name)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } else {
+      state.trucks = [];
+    }
+    initialTrucksLoaded = true;
+    renderSelects();
+    onDataChanged();
+  }, err => {
+    console.error("Trucks listener error:", err);
+  });
+
+  // Live listener: truck inventory
+  db.collection("truck_inventory").onSnapshot(snap => {
+    state.truckInventory = [];
+    snap.forEach(doc => state.truckInventory.push(Object.assign({ id: doc.id }, doc.data())));
+    state.truckInventory.sort((a, b) => (a.truck || "").localeCompare(b.truck || "") || (a.partName || "").localeCompare(b.partName || ""));
+    initialTruckInventoryLoaded = true;
+    onDataChanged();
+  }, err => {
+    console.error("Truck inventory listener error:", err);
+    setConnectionStatus("Connection error", "error");
+  });
 }
 
 function onDataChanged() {
   if (initialPartsLoaded && initialInvoicesLoaded && initialMetaLoaded
-      && initialLocationsLoaded && initialUsersLoaded) {
+      && initialLocationsLoaded && initialUsersLoaded && initialTrucksLoaded && initialTruckInventoryLoaded) {
     setConnectionStatus("Live", "connected");
   }
   // Re-render everything that depends on data
   renderDashboard();
   renderInventoryTable();
+  renderTruckInventoryTable();
   renderInvoiceTable();
   refreshAllLineInfo();
   // If line items haven't been initialized yet, do it once parts are loaded
@@ -262,11 +325,34 @@ function onDataChanged() {
 
 function renderSelects() {
   const location = qs("location");
-  const currentValue = location.value;
-  location.innerHTML = state.locations.map(loc =>
-    `<option value="${escapeHtml(loc.name)}">${escapeHtml(loc.name)}</option>`
-  ).join("");
-  if (currentValue) location.value = currentValue;
+  if (location) {
+    const currentValue = location.value;
+    location.innerHTML = state.locations.map(loc =>
+      `<option value="${escapeHtml(loc.name)}">${escapeHtml(loc.name)}</option>`
+    ).join("");
+    if (currentValue) location.value = currentValue;
+  }
+
+  ["checkoutTruck", "invoiceTruck"].forEach(id => {
+    const select = qs(id);
+    if (!select) return;
+    const current = select.value;
+    const blankOption = id === "invoiceTruck"
+      ? `<option value="">— Select truck —</option>`
+      : `<option value="">— Select truck —</option>`;
+    select.innerHTML = blankOption + state.trucks.map(t =>
+      `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}${t.driver ? ` (${escapeHtml(t.driver)})` : ""}</option>`
+    ).join("");
+    if (current) select.value = current;
+  });
+
+  const typeSelect = qs("checkoutRackingType");
+  if (typeSelect) {
+    const currentType = typeSelect.value || getRackingTypes()[0] || "";
+    typeSelect.innerHTML = rackingTypeOptions(currentType);
+    if (currentType) typeSelect.value = currentType;
+    updateCheckoutPartList();
+  }
 }
 
 // Look up the full location object by name (returns null if not found)
@@ -275,21 +361,63 @@ function getLocationByName(name) {
   return state.locations.find(l => l.name === name) || null;
 }
 
+function getAllPartsForDropdowns() {
+  const liveParts = Array.isArray(state.parts) ? state.parts : [];
+  if (liveParts.length) return liveParts;
+
+  // Fallback while Firestore is still loading so the checkout dropdown is not blank.
+  if (typeof STARTING_PARTS !== "undefined" && Array.isArray(STARTING_PARTS)) {
+    return STARTING_PARTS.map((part, index) => ({
+      id: `part-${index + 1}`,
+      rackingType: part.rackingType,
+      name: part.name,
+      startingQuantity: Number(part.startingQuantity || 0),
+      currentQuantity: Number(part.startingQuantity || 0),
+      costEach: Number(part.costEach || 0)
+    }));
+  }
+  return [];
+}
+
 function getRackingTypes() {
-  return [...new Set(state.parts.map(p => p.rackingType))];
+  return [...new Set(getAllPartsForDropdowns().map(p => p.rackingType).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b)));
 }
 
 function rackingTypeOptions(selectedValue = "") {
-  return getRackingTypes().map(type => (
+  const types = getRackingTypes();
+  if (!types.length) return `<option value="">No racking types found</option>`;
+  return types.map(type => (
     `<option value="${escapeHtml(type)}" ${type === selectedValue ? "selected" : ""}>${escapeHtml(type)}</option>`
   )).join("");
 }
 
 function partOptionsForType(rackingType, selectedPartId = "") {
-  return state.parts
+  const parts = getAllPartsForDropdowns()
     .filter(p => p.rackingType === rackingType)
-    .map(p => `<option value="${p.id}" ${p.id === selectedPartId ? "selected" : ""}>${escapeHtml(p.name)}</option>`)
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+  if (!parts.length) return `<option value="">No parts found for this racking type</option>`;
+  return parts
+    .map(p => `<option value="${escapeHtml(p.id)}" ${p.id === selectedPartId ? "selected" : ""}>${escapeHtml(p.name)}</option>`)
     .join("");
+}
+
+function makeTruckInventoryId(truck, partId) {
+  return `${String(truck || "").replace(/[^A-Za-z0-9_-]/g, "_")}__${partId}`;
+}
+
+function getTruckPartQty(truck, partId) {
+  const row = state.truckInventory.find(t => t.truck === truck && t.partId === partId);
+  return Number(row && row.quantity || 0);
+}
+
+function updateCheckoutPartList() {
+  const typeSelect = qs("checkoutRackingType");
+  const partSelect = qs("checkoutPart");
+  if (!typeSelect || !partSelect) return;
+  const currentPart = partSelect.value;
+  partSelect.innerHTML = partOptionsForType(typeSelect.value, currentPart);
 }
 
 function addLineItem(preset) {
@@ -374,9 +502,11 @@ function updateLineInfo(line) {
     info.innerHTML = "";
     return;
   }
+  const selectedTruck = qs("invoiceTruck") ? qs("invoiceTruck").value : "";
+  const truckQty = selectedTruck ? getTruckPartQty(selectedTruck, selectedPart.id) : 0;
   info.innerHTML =
-    `<div>In stock: <strong>${Number(selectedPart.currentQuantity || 0)}</strong></div>` +
-    `<div>Cost each: <strong>${money(selectedPart.costEach)}</strong></div>`;
+    `<div>On selected truck: <strong>${truckQty}</strong></div>` +
+    `<div>Warehouse: <strong>${Number(selectedPart.currentQuantity || 0)}</strong> · Cost: <strong>${money(selectedPart.costEach)}</strong></div>`;
 }
 
 function refreshAllLineInfo() {
@@ -399,10 +529,12 @@ function renderDashboard() {
   const totalValue = state.parts.reduce((sum, p) => sum + Number(p.currentQuantity || 0) * Number(p.costEach || 0), 0);
   const lowStock = state.parts.filter(p => Number(p.currentQuantity || 0) <= Number(p.lowStockThreshold || 0)).length;
   const invoiceTotal = state.invoices.reduce((sum, inv) => sum + Number(inv.total || 0), 0);
+  const truckQty = state.truckInventory.reduce((sum, t) => sum + Number(t.quantity || 0), 0);
 
   qs("dashboard").innerHTML = `
     <div class="card"><span>Part Types</span><strong>${totalItems}</strong></div>
-    <div class="card"><span>Current Quantity</span><strong>${totalQty}</strong></div>
+    <div class="card"><span>Warehouse Qty</span><strong>${totalQty}</strong></div>
+    <div class="card"><span>Truck Qty</span><strong>${truckQty}</strong></div>
     <div class="card"><span>Inventory Value</span><strong>${money(totalValue)}</strong></div>
     <div class="card alert"><span>Low Stock Items</span><strong>${lowStock}</strong></div>
     <div class="card"><span>Invoice Total</span><strong>${money(invoiceTotal)}</strong></div>
@@ -426,6 +558,90 @@ function renderInventoryTable() {
     `;
   }).join("");
   qs("inventoryBody").innerHTML = rows;
+}
+
+function renderTruckInventoryTable() {
+  const container = qs("truckInventoryContainer");
+  if (!container) return;
+
+  // Build a map: truckName -> array of inventory rows
+  const byTruck = new Map();
+  for (const t of state.truckInventory) {
+    if (Number(t.quantity || 0) <= 0) continue;
+    const name = t.truck || "";
+    if (!byTruck.has(name)) byTruck.set(name, []);
+    byTruck.get(name).push(t);
+  }
+
+  // Build a list of all known trucks (from settings + any unknown ones from inventory)
+  const allTruckNames = new Set();
+  for (const t of state.trucks) allTruckNames.add(t.name);
+  for (const name of byTruck.keys()) allTruckNames.add(name);
+
+  if (!allTruckNames.size) {
+    container.innerHTML = `<p class="muted" style="text-align:center;padding:20px;">No trucks set up yet. An admin can add trucks on the Admin page.</p>`;
+    return;
+  }
+
+  // Sort truck names alphabetically
+  const truckNames = [...allTruckNames].sort((a, b) => a.localeCompare(b));
+
+  container.innerHTML = truckNames.map(truckName => {
+    const items = (byTruck.get(truckName) || [])
+      .slice()
+      .sort((a, b) => (a.rackingType || "").localeCompare(b.rackingType || "") || (a.partName || "").localeCompare(b.partName || ""));
+
+    const truckInfo = state.trucks.find(t => t.name === truckName) || { driver: "", notes: "" };
+    const totalQty = items.reduce((s, t) => s + Number(t.quantity || 0), 0);
+    const totalValue = items.reduce((s, t) => s + Number(t.quantity || 0) * Number(t.costEach || 0), 0);
+
+    const headerLine = truckInfo.driver
+      ? `<strong>${escapeHtml(truckName)}</strong> <span class="muted">— ${escapeHtml(truckInfo.driver)}</span>`
+      : `<strong>${escapeHtml(truckName)}</strong>`;
+
+    const subtotal = items.length
+      ? `<p class="muted" style="margin:0 0 8px;">${totalQty} item${totalQty === 1 ? "" : "s"} on board · <strong>${money(totalValue)}</strong> total value</p>`
+      : `<p class="muted" style="margin:0 0 8px;">Empty — no inventory currently loaded.</p>`;
+
+    const rows = items.length
+      ? `
+        <table class="truck-inv-table">
+          <thead>
+            <tr>
+              <th>Racking Type</th>
+              <th>Item / Part</th>
+              <th style="text-align:right;">Qty</th>
+              <th style="text-align:right;">Cost Each</th>
+              <th style="text-align:right;">Line Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(t => {
+              const qty = Number(t.quantity || 0);
+              const cost = Number(t.costEach || 0);
+              return `
+                <tr>
+                  <td>${escapeHtml(t.rackingType || "")}</td>
+                  <td>${escapeHtml(t.partName || "")}</td>
+                  <td style="text-align:right;">${qty}</td>
+                  <td style="text-align:right;">${money(cost)}</td>
+                  <td style="text-align:right;">${money(qty * cost)}</td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      `
+      : "";
+
+    return `
+      <div class="truck-card">
+        <h3 style="margin:0 0 4px;">${headerLine}</h3>
+        ${subtotal}
+        ${rows}
+      </div>
+    `;
+  }).join("");
 }
 
 // "YYYY-MM" for the current local month (used to filter invoices on main page)
@@ -476,9 +692,9 @@ function renderInvoiceTable() {
 
   if (!visible.length) {
     if (totalCount > 0) {
-      body.innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">No invoices created this month yet. ${olderCount} older invoice${olderCount === 1 ? "" : "s"} are in Admin → Archived Invoices.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No invoices created this month yet. ${olderCount} older invoice${olderCount === 1 ? "" : "s"} are in Admin → Archived Invoices.</td></tr>`;
     } else {
-      body.innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">No invoices created yet.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No invoices created yet.</td></tr>`;
     }
     return;
   }
@@ -493,11 +709,13 @@ function renderInvoiceTable() {
       <tr>
         <td>
           <strong>${safeInvNum}</strong>
+          ${inv.isDamageWriteOff ? `<br><span class="damage-badge">DAMAGE</span>` : ""}
           ${edited ? `<br><span class="muted" style="font-size:11px;">edited ${escapeHtml(formatDate(inv.lastEditedDate))}</span>` : ""}
         </td>
         <td>${escapeHtml(formatDate(inv.date))}</td>
         <td>${escapeHtml(inv.user || "—")}</td>
         <td>${escapeHtml(inv.location || "—")}</td>
+        <td>${escapeHtml(inv.truck || "—")}</td>
         <td>${lines.length}</td>
         <td><strong>${money(inv.total)}</strong></td>
         <td>
@@ -524,7 +742,7 @@ function renderInvoiceTable() {
       `).join("");
       rows.push(`
         <tr class="invoice-detail-row">
-          <td colspan="7">
+          <td colspan="8">
             <table>
               <thead>
                 <tr>
@@ -633,6 +851,79 @@ function makeMovementRef() {
 
 // ---------- Create / edit invoice -----------------------------------------
 
+async function checkoutInventoryToTruck(event) {
+  event.preventDefault();
+  const truck = qs("checkoutTruck").value;
+  const partId = qs("checkoutPart").value;
+  const qty = Number(qs("checkoutQty").value || 0);
+  const user = getCurrentUser();
+
+  if (!user) return showCheckoutMessage("Please select your name first.", true);
+  if (!truck) return showCheckoutMessage("Please select a truck.", true);
+  if (!partId) return showCheckoutMessage("Please select a part.", true);
+  if (qty <= 0) return showCheckoutMessage("Quantity must be greater than zero.", true);
+
+  const btn = qs("checkoutButton");
+  btn.disabled = true;
+  btn.textContent = "Moving...";
+
+  try {
+    await db.runTransaction(async tx => {
+      const now = firebase.firestore.FieldValue.serverTimestamp();
+      const partRef = db.collection("parts").doc(partId);
+      const truckRef = db.collection("truck_inventory").doc(makeTruckInventoryId(truck, partId));
+      const partDoc = await tx.get(partRef);
+      const truckDoc = await tx.get(truckRef);
+      if (!partDoc.exists) throw new Error("Part was not found.");
+      const part = partDoc.data();
+      const warehouseBefore = Number(part.currentQuantity || 0);
+      if (warehouseBefore < qty) throw new Error(`Not enough warehouse inventory. Available: ${warehouseBefore}`);
+      const truckBefore = truckDoc.exists ? Number(truckDoc.data().quantity || 0) : 0;
+
+      tx.update(partRef, { currentQuantity: warehouseBefore - qty, updatedAt: now });
+      tx.set(truckRef, {
+        truck,
+        partId,
+        partName: part.name || "",
+        rackingType: part.rackingType || "",
+        costEach: Number(part.costEach || 0),
+        quantity: truckBefore + qty,
+        updatedAt: now
+      }, { merge: true });
+      tx.set(makeMovementRef(), {
+        timestamp: now,
+        type: "WAREHOUSE_TO_TRUCK",
+        partId,
+        partName: part.name || "",
+        rackingType: part.rackingType || "",
+        quantityChange: -qty,
+        beforeQuantity: warehouseBefore,
+        afterQuantity: warehouseBefore - qty,
+        truck,
+        truckBeforeQuantity: truckBefore,
+        truckAfterQuantity: truckBefore + qty,
+        user
+      });
+    });
+    qs("checkoutQty").value = "";
+    showCheckoutMessage(`Moved ${qty} item(s) to ${truck}.`, false);
+  } catch (err) {
+    console.error("Checkout failed:", err);
+    showCheckoutMessage("Checkout failed: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Move to Truck";
+  }
+}
+
+function showCheckoutMessage(message, isError) {
+  const box = qs("checkoutMessage");
+  if (!box) return showMessage(message, isError);
+  box.textContent = message;
+  box.className = isError ? "message error" : "message success";
+  setTimeout(() => { box.textContent = ""; box.className = "message"; }, 5000);
+}
+
 async function useInventory(event) {
   event.preventDefault();
   const requestedLines = getInvoiceLinesFromForm();
@@ -647,6 +938,12 @@ async function useInventory(event) {
   for (const line of requestedLines) {
     if (!line.part) return showMessage("Please select a part for every line item.", true);
     if (line.qtyUsed <= 0) return showMessage("Quantity used must be greater than zero on every line.", true);
+  }
+
+  const invoiceTruck = qs("invoiceTruck") ? qs("invoiceTruck").value : "";
+  if (!invoiceTruck) {
+    showMessage("Please select the truck used for this store invoice.", true);
+    return;
   }
 
   const isEditing = !!editingInvoiceNumber;
@@ -689,25 +986,27 @@ async function useInventory(event) {
 
       const diffByPart = isEditing ? getDiffByPart(oldLines, invoiceLines) : groupQuantitiesByPart(invoiceLines);
 
-      // Read 2: every part doc we're going to touch (so we can validate stock)
+      // Read 2: every truck inventory doc we're going to touch (so we can validate truck stock)
       const partReads = [];
+      const truckForInvoice = invoiceTruck;
       for (const [partId, diffQty] of diffByPart.entries()) {
         if (diffQty === 0) continue;
-        const partRef = db.collection("parts").doc(partId);
-        partReads.push({ partId, diffQty, partRef, partDoc: await tx.get(partRef) });
+        const basePart = state.parts.find(p => p.id === partId) || {};
+        const truckRef = db.collection("truck_inventory").doc(makeTruckInventoryId(truckForInvoice, partId));
+        partReads.push({ partId, diffQty, truckRef, truckDoc: await tx.get(truckRef), partData: basePart });
       }
 
-      // Validate stock based on the reads we just did
+      // Validate truck stock based on the reads we just did
       for (const r of partReads) {
-        if (!r.partDoc.exists) throw new Error(`Part ${r.partId} was not found.`);
-        const beforeQty = Number(r.partDoc.data().currentQuantity || 0);
+        const beforeQty = r.truckDoc.exists ? Number(r.truckDoc.data().quantity || 0) : 0;
+        const partName = (r.truckDoc.exists && r.truckDoc.data().partName) || r.partData.name || r.partId;
         const afterQty = beforeQty - r.diffQty;
         if (afterQty < 0) {
-          throw new Error(`Not Enough Inventory for ${r.partDoc.data().name}. Available: ${beforeQty}, Requested: ${r.diffQty}`);
+          throw new Error(`Not enough inventory on ${truckForInvoice} for ${partName}. Available on truck: ${beforeQty}, Requested: ${r.diffQty}`);
         }
         r.beforeQty = beforeQty;
         r.afterQty = afterQty;
-        r.partData = r.partDoc.data();
+        r.partData = r.truckDoc.exists ? Object.assign({}, r.partData, r.truckDoc.data()) : r.partData;
       }
 
       // === PHASE 2: ALL WRITES ===
@@ -718,19 +1017,20 @@ async function useInventory(event) {
         tx.set(counterRef, { nextInvoiceNumber: current + 1 }, { merge: true });
       }
 
-      // Deduct inventory and log movements
+      // Deduct truck inventory and log movements
       for (const r of partReads) {
-        tx.update(r.partRef, { currentQuantity: r.afterQty, updatedAt: now });
+        tx.set(r.truckRef, { quantity: r.afterQty, updatedAt: now }, { merge: true });
         tx.set(makeMovementRef(), {
           timestamp: now,
-          type: isEditing ? "INVOICE_EDIT" : "INVOICE_USE",
+          type: isEditing ? "TRUCK_INVOICE_EDIT" : "TRUCK_TO_STORE_INVOICE",
           invoiceNumber,
           partId: r.partId,
-          partName: r.partData.name || "",
+          partName: r.partData.partName || r.partData.name || "",
           rackingType: r.partData.rackingType || "",
           quantityChange: -r.diffQty,
           beforeQuantity: r.beforeQty,
           afterQuantity: r.afterQty,
+          truck: truckForInvoice,
           user,
           location: qs("location").value
         });
@@ -746,6 +1046,7 @@ async function useInventory(event) {
         invoiceNumber,
         date: existingInvoice ? existingInvoice.date : todayText(),
         location: locName,
+        truck: invoiceTruck,
         locationDetails: locDetails,
         user,
         workOrderNumber: (qs("workOrderNumber") && qs("workOrderNumber").value || "").trim(),
@@ -1073,10 +1374,25 @@ function buildAndDownloadInvoicePdf(invoice) {
   }
 
   // ===== INVOICE METADATA BLOCK =====
+  const isDamage = !!invoice.isDamageWriteOff;
   doc.setTextColor(...GREEN_DARK);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(15);
-  doc.text("RACKING INVENTORY INVOICE", 14, 46);
+  doc.text(isDamage ? "DAMAGE WRITE-OFF INVOICE" : "RACKING INVENTORY INVOICE", 14, 46);
+
+  // Red "DAMAGE WRITE-OFF" stamp diagonally on damage invoices
+  if (isDamage) {
+    doc.saveGraphicsState();
+    doc.setGState(new doc.GState({ opacity: 0.18 }));
+    doc.setTextColor(180, 30, 30);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(56);
+    // Rotate text -25° around the page center
+    doc.text("DAMAGE WRITE-OFF", PAGE_W / 2, 150, { align: "center", angle: 25 });
+    doc.restoreGraphicsState();
+    // Reset for the next text draws
+    doc.setTextColor(...GREEN_DARK);
+  }
 
   // Left column labels & values
   doc.setFont("helvetica", "bold");
@@ -1137,6 +1453,17 @@ function buildAndDownloadInvoicePdf(invoice) {
     doc.setFontSize(11);
     doc.setTextColor(0, 0, 0);
     doc.text(invoice.user, 50, belowY);
+    belowY += 7;
+  }
+  if (invoice.truck) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text("TRUCK", 14, belowY);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    doc.text(invoice.truck, 50, belowY);
     belowY += 7;
   }
   if (invoice.workOrderNumber) {
@@ -1269,6 +1596,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  if (qs("checkoutForm")) qs("checkoutForm").addEventListener("submit", checkoutInventoryToTruck);
+  if (qs("checkoutRackingType")) qs("checkoutRackingType").addEventListener("change", updateCheckoutPartList);
+  if (qs("invoiceTruck")) qs("invoiceTruck").addEventListener("change", refreshAllLineInfo);
   qs("usageForm").addEventListener("submit", useInventory);
   qs("addLineButton").addEventListener("click", () => addLineItem());
   qs("cancelEditButton").addEventListener("click", () => cancelEditInvoice(false));
@@ -1277,6 +1607,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderSelects();
   renderDashboard();
   renderInventoryTable();
+  renderTruckInventoryTable();
   renderInvoiceTable();
 
   try {
@@ -1286,6 +1617,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       await seedMetaIfMissing();
       await seedLocationsIfEmpty();
       await seedUsersIfEmpty();
+      await seedTrucksIfEmpty();
     }
     attachListeners();
   } catch (err) {
