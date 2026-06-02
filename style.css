@@ -788,3 +788,32 @@ input.cell-edit:focus {
   margin-top: 2px;
 }
 
+
+/* Archived month cards (admin Archived Invoices tab) */
+.archived-month-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  background: white;
+}
+.archived-month-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  background: #f8fafc;
+  border: 0;
+  border-bottom: 1px solid #e2e8f0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: #0f3a2a;
+}
+.archived-month-header:hover {
+  background: #f1f5f9;
+}
+.archived-month-body {
+  padding: 14px 18px;
+}
+

@@ -274,20 +274,8 @@
       <section id="tab-archived" class="tab-panel">
         <div class="panel">
           <h2>Archived Invoices <span class="live-badge">Live</span></h2>
-          <p class="muted">Invoices from past months, grouped by calendar month. The current month's invoices appear on the main page. Click <strong>Download .xlsx</strong> to export a month's invoices into a spreadsheet — files are generated on demand from live Firestore data, nothing is ever deleted.</p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Month</th>
-                  <th>Invoices</th>
-                  <th>Total</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="archivedMonthsBody"></tbody>
-            </table>
-          </div>
+          <p class="muted">Invoices from past months, grouped by calendar month. The current month's invoices appear on the main page. Click any month to view its invoices; click <strong>Download .xlsx</strong> to export that month's invoices into a spreadsheet with full line-item detail. Files are generated on demand from live Firestore data, nothing is ever deleted.</p>
+          <div id="archivedMonthsContainer"></div>
         </div>
       </section>
 
@@ -327,6 +315,10 @@
 
   <!-- SheetJS for Excel export -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- jsPDF for PDF download from archived invoices -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 
   <!-- Config + seed data (used only for first-run seeding) -->
   <script src="firebase-config.js"></script>

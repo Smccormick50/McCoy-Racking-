@@ -1343,35 +1343,381 @@ function groupArchivedInvoices() {
   return groups;
 }
 
+// Track which month/invoice are expanded in the Archived Invoices view
+let expandedArchivedMonth = null;
+let expandedArchivedInvoice = null;
+
 function renderArchivedMonths() {
-  const body = qs("archivedMonthsBody");
-  if (!body) return;
+  const container = qs("archivedMonthsContainer");
+  if (!container) return;
 
   const groups = groupArchivedInvoices();
   if (!groups.size) {
-    body.innerHTML = `<tr><td colspan="4" class="muted" style="text-align:center;padding:20px;">No archived months yet. Invoices from previous calendar months will appear here.</td></tr>`;
+    container.innerHTML = `<p class="muted" style="text-align:center;padding:20px;">No archived months yet. Invoices from previous calendar months will appear here.</p>`;
     return;
   }
 
   const keys = [...groups.keys()].sort().reverse();
-  body.innerHTML = keys.map(key => {
+  container.innerHTML = keys.map(key => {
     const invs = groups.get(key);
     const total = invs.reduce((s, inv) => s + Number(inv.total || 0), 0);
+    const isOpen = expandedArchivedMonth === key;
+    const arrow = isOpen ? "▼" : "▶";
+
+    let body = "";
+    if (isOpen) {
+      // Sort invoices newest first within the month
+      const sorted = invs.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+      body = `
+        <div class="archived-month-body">
+          <div style="margin-bottom:10px;">
+            <button type="button" data-export-month="${escapeHtml(key)}">Download .xlsx for ${escapeHtml(monthLabel(key))}</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Invoice #</th>
+                  <th>Date</th>
+                  <th>User</th>
+                  <th>Location</th>
+                  <th>Truck</th>
+                  <th>Items</th>
+                  <th>Total</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sorted.map(inv => {
+                  const lines = Array.isArray(inv.lineItems) ? inv.lineItems : [];
+                  const isInvOpen = expandedArchivedInvoice === inv.invoiceNumber;
+                  const rows = [`
+                    <tr>
+                      <td>
+                        <strong>${escapeHtml(inv.invoiceNumber || "")}</strong>
+                        ${inv.isDamageWriteOff ? `<br><span class="damage-badge">DAMAGE</span>` : ""}
+                      </td>
+                      <td>${escapeHtml(formatDate(inv.date))}</td>
+                      <td>${escapeHtml(inv.user || "—")}</td>
+                      <td>${escapeHtml(inv.location || "—")}</td>
+                      <td>${escapeHtml(inv.truck || "—")}</td>
+                      <td>${lines.length}</td>
+                      <td><strong>${money(inv.total)}</strong></td>
+                      <td>
+                        <div class="action-buttons">
+                          <button type="button" class="secondary" data-archived-action="toggle" data-invnum="${escapeHtml(inv.invoiceNumber)}">${isInvOpen ? "Hide" : "View"}</button>
+                          <button type="button" data-archived-action="pdf" data-invnum="${escapeHtml(inv.invoiceNumber)}">PDF</button>
+                        </div>
+                      </td>
+                    </tr>
+                  `];
+                  if (isInvOpen) {
+                    rows.push(`
+                      <tr>
+                        <td colspan="8" style="background:#f8fafc;">
+                          <table style="margin:8px 0;">
+                            <thead>
+                              <tr>
+                                <th>Racking Type</th><th>Item / Part</th><th>Qty</th><th>Cost Each</th><th>Line Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              ${lines.map(l => `
+                                <tr>
+                                  <td>${escapeHtml(l.rackingType || "")}</td>
+                                  <td>${escapeHtml(l.partName || "")}</td>
+                                  <td>${Number(l.quantityUsed || 0)}</td>
+                                  <td>${money(l.costEach)}</td>
+                                  <td>${money(l.total)}</td>
+                                </tr>
+                              `).join("")}
+                            </tbody>
+                          </table>
+                          ${inv.notes ? `<p class="muted" style="margin:6px 0 8px;"><strong>Notes:</strong> ${escapeHtml(inv.notes)}</p>` : ""}
+                        </td>
+                      </tr>
+                    `);
+                  }
+                  return rows.join("");
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
     return `
-      <tr>
-        <td><strong>${escapeHtml(monthLabel(key))}</strong></td>
-        <td>${invs.length}</td>
-        <td><strong>${money(total)}</strong></td>
-        <td>
-          <button type="button" data-month="${escapeHtml(key)}">Download .xlsx</button>
-        </td>
-      </tr>
+      <div class="archived-month-card">
+        <button type="button" class="archived-month-header" data-toggle-month="${escapeHtml(key)}">
+          <span style="font-size:18px;margin-right:8px;">${arrow}</span>
+          <strong style="font-size:16px;">${escapeHtml(monthLabel(key))}</strong>
+          <span class="muted" style="margin-left:auto;">${invs.length} invoice${invs.length === 1 ? "" : "s"} · ${money(total)}</span>
+        </button>
+        ${body}
+      </div>
     `;
   }).join("");
 
-  body.querySelectorAll("button[data-month]").forEach(btn => {
-    btn.addEventListener("click", () => exportArchivedMonth(btn.dataset.month));
+  // Wire up month-header toggles
+  container.querySelectorAll("button[data-toggle-month]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.toggleMonth;
+      expandedArchivedMonth = (expandedArchivedMonth === key) ? null : key;
+      expandedArchivedInvoice = null; // close any open invoice when changing months
+      renderArchivedMonths();
+    });
   });
+
+  // Wire up Download .xlsx buttons
+  container.querySelectorAll("button[data-export-month]").forEach(btn => {
+    btn.addEventListener("click", () => exportArchivedMonth(btn.dataset.exportMonth));
+  });
+
+  // Wire up View / PDF buttons per invoice
+  container.querySelectorAll("button[data-archived-action]").forEach(btn => {
+    const action = btn.dataset.archivedAction;
+    const invnum = btn.dataset.invnum;
+    btn.addEventListener("click", () => {
+      if (action === "toggle") {
+        expandedArchivedInvoice = (expandedArchivedInvoice === invnum) ? null : invnum;
+        renderArchivedMonths();
+      } else if (action === "pdf") {
+        downloadArchivedInvoicePdf(invnum);
+      }
+    });
+  });
+}
+
+function downloadArchivedInvoicePdf(invoiceNumber) {
+  const invoice = adminState.invoices.find(inv => inv.invoiceNumber === invoiceNumber);
+  if (!invoice) {
+    showAdminMessage("Invoice not found.", true);
+    return;
+  }
+  buildAndDownloadInvoicePdf(invoice);
+}
+
+// ---- Helper functions for PDF generation (copied from app.js) ----
+
+function formatDate(stored) {
+  if (!stored) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(stored));
+  if (!m) return String(stored);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return d.toLocaleDateString();
+}
+
+function getInvoiceLineItems(invoice) {
+  if (Array.isArray(invoice.lineItems)) return invoice.lineItems;
+  return [{
+    rackingType: invoice.rackingType,
+    partId: invoice.partId,
+    partName: invoice.partName,
+    quantityUsed: invoice.quantityUsed,
+    costEach: invoice.costEach,
+    total: invoice.total
+  }];
+}
+
+// Builds a branded PDF for a given invoice. Mirrors the app.js version.
+function buildAndDownloadInvoicePdf(invoice) {
+  if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+    showAdminMessage("PDF library didn't load. Check your internet connection and refresh the page.", true);
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  if (typeof doc.autoTable !== "function") {
+    showAdminMessage("PDF table library didn't load. Check your internet connection and refresh the page.", true);
+    return;
+  }
+  const lineItems = getInvoiceLineItems(invoice);
+
+  const GREEN_DARK = [15, 58, 42];
+  const GREEN_MID  = [22, 107, 70];
+  const YELLOW     = [245, 209, 22];
+  const PAGE_W     = doc.internal.pageSize.getWidth();
+
+  // Header band
+  doc.setFillColor(...GREEN_DARK);
+  doc.rect(0, 0, PAGE_W, 32, "F");
+  doc.setFillColor(...YELLOW);
+  doc.rect(0, 32, PAGE_W, 2, "F");
+
+  doc.setTextColor(...YELLOW);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(22);
+  doc.text("Mc Racking", 14, 16);
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  const hq = [
+    "McCoy Corporation Headquarters",
+    "1350 N I.H. 35",
+    "San Marcos, TX 78666"
+  ];
+  let hqY = 12;
+  for (const line of hq) {
+    doc.text(line, PAGE_W - 14, hqY, { align: "right" });
+    hqY += 5;
+  }
+
+  const isDamage = !!invoice.isDamageWriteOff;
+  doc.setTextColor(...GREEN_DARK);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.text(isDamage ? "DAMAGE WRITE-OFF INVOICE" : "RACKING INVENTORY INVOICE", 14, 46);
+
+  if (isDamage) {
+    doc.saveGraphicsState();
+    doc.setGState(new doc.GState({ opacity: 0.18 }));
+    doc.setTextColor(180, 30, 30);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(56);
+    doc.text("DAMAGE WRITE-OFF", PAGE_W / 2, 150, { align: "center", angle: 25 });
+    doc.restoreGraphicsState();
+    doc.setTextColor(...GREEN_DARK);
+  }
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(80, 80, 80);
+  doc.text("INVOICE #", 14, 56);
+  doc.text("DATE", 14, 66);
+  if (invoice.lastEditedDate && invoice.lastEditedDate !== invoice.date) {
+    doc.text("LAST EDITED", 14, 76);
+  }
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(0, 0, 0);
+  doc.setFontSize(11);
+  doc.text(invoice.invoiceNumber || "", 50, 56);
+  doc.text(formatDate(invoice.date) || "", 50, 66);
+  if (invoice.lastEditedDate && invoice.lastEditedDate !== invoice.date) {
+    doc.text(formatDate(invoice.lastEditedDate) || "", 50, 76);
+  }
+
+  // Ship To box
+  const shipBoxX = 115, shipBoxY = 50, shipBoxW = 81, shipBoxH = 38;
+  doc.setDrawColor(...GREEN_MID);
+  doc.setLineWidth(0.5);
+  doc.rect(shipBoxX, shipBoxY, shipBoxW, shipBoxH, "S");
+  doc.setFillColor(...GREEN_DARK);
+  doc.rect(shipBoxX, shipBoxY, shipBoxW, 6, "F");
+  doc.setTextColor(...YELLOW);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("SHIP TO", shipBoxX + 3, shipBoxY + 4.4);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  const loc = invoice.locationDetails || {};
+  const locName = loc.name || invoice.location || "";
+  let by = shipBoxY + 12;
+  if (locName) { doc.text(locName, shipBoxX + 3, by); by += 5; }
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  if (loc.address) { doc.text(loc.address, shipBoxX + 3, by); by += 4.5; }
+  const cityState = [loc.city, loc.state].filter(Boolean).join(", ");
+  const cityStateZip = (cityState + (loc.zip ? " " + loc.zip : "")).trim();
+  if (cityStateZip) { doc.text(cityStateZip, shipBoxX + 3, by); by += 4.5; }
+  if (loc.phone) { doc.text("Phone: " + loc.phone, shipBoxX + 3, by); by += 4.5; }
+
+  let belowY = Math.max(82, shipBoxY + shipBoxH + 6);
+  if (invoice.user) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text("CREATED BY", 14, belowY);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    doc.text(invoice.user, 50, belowY);
+    belowY += 7;
+  }
+  if (invoice.truck) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text("TRUCK", 14, belowY);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    doc.text(invoice.truck, 50, belowY);
+    belowY += 7;
+  }
+  if (invoice.workOrderNumber) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text("WORK ORDER #", 14, belowY);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    doc.text(invoice.workOrderNumber, 50, belowY);
+    belowY += 7;
+  }
+  if (invoice.poNumber) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text("PO #", 14, belowY);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    doc.text(invoice.poNumber, 50, belowY);
+    belowY += 7;
+  }
+
+  doc.autoTable({
+    startY: belowY + 4,
+    head: [["Racking Type", "Item / Part", "Qty Used", "Cost Each", "Line Total"]],
+    body: lineItems.map(line => [
+      line.rackingType,
+      line.partName,
+      line.quantityUsed,
+      money(line.costEach),
+      money(line.total)
+    ]),
+    headStyles: { fillColor: GREEN_DARK, textColor: YELLOW, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    styles: { fontSize: 10, cellPadding: 3 },
+    columnStyles: { 2: { halign: "right" }, 3: { halign: "right" }, 4: { halign: "right" } },
+    margin: { left: 14, right: 14 }
+  });
+
+  let finalY = doc.lastAutoTable.finalY + 6;
+  doc.setFillColor(...GREEN_DARK);
+  doc.rect(14, finalY, PAGE_W - 28, 12, "F");
+  doc.setTextColor(...YELLOW);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("INVOICE TOTAL", 18, finalY + 8);
+  doc.text(money(invoice.total), PAGE_W - 18, finalY + 8, { align: "right" });
+
+  finalY += 22;
+  doc.setTextColor(0, 0, 0);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  if (invoice.notes) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Notes:", 14, finalY);
+    finalY += 6;
+    doc.setFont("helvetica", "normal");
+    const wrapped = doc.splitTextToSize(String(invoice.notes), PAGE_W - 28);
+    doc.text(wrapped, 14, finalY);
+    finalY += wrapped.length * 5 + 8;
+  }
+  doc.text("Authorized Signature: ______________________________", 14, finalY);
+
+  doc.setTextColor(120, 120, 120);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.text("Mc Racking - McCoy Corporation Headquarters - 1350 N I.H. 35, San Marcos, TX 78666",
+           PAGE_W / 2, doc.internal.pageSize.getHeight() - 8, { align: "center" });
+
+  doc.save(`${invoice.invoiceNumber}.pdf`);
 }
 
 function exportArchivedMonth(monthKey) {
