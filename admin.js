@@ -10,6 +10,7 @@ let adminState = {
   invoices: [],
   auditLog: [],
   deletions: [],
+  receipts: [],
   meta: null
 };
 
@@ -94,6 +95,7 @@ function attachAdminListeners() {
       return an - bn;
     });
     renderPartsTable();
+    populateReceivingDropdowns();
     updateExportCounts();
     setConnectionStatus("Live", "connected");
   }, err => {
@@ -164,6 +166,14 @@ function attachAdminListeners() {
     snap.forEach(d => adminState.invoices.push(d.data()));
     updateExportCounts();
     renderArchivedMonths();
+  });
+
+  db.collection("receipts").orderBy("date", "desc").onSnapshot(snap => {
+    adminState.receipts = [];
+    snap.forEach(d => adminState.receipts.push({ id: d.id, ...d.data() }));
+    renderReceiptsTable();
+  }, err => {
+    console.error("Receipts listener error:", err);
   });
 }
 
@@ -1854,6 +1864,197 @@ function renderAuditLog() {
   }).join("");
 }
 
+// ---------- RECEIVING tab --------------------------------------------------
+
+function populateReceivingDropdowns() {
+  const typeSelect = qs("receiptRackingType");
+  const partSelect = qs("receiptPart");
+  if (!typeSelect || !partSelect) return;
+
+  // Unique racking types from parts
+  const types = [...new Set(adminState.parts.map(p => p.rackingType).filter(Boolean))].sort();
+  const previousType = typeSelect.value;
+  typeSelect.innerHTML = `<option value="">— Select —</option>` +
+    types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+  if (previousType && types.includes(previousType)) typeSelect.value = previousType;
+
+  populateReceivingPartDropdown();
+}
+
+function populateReceivingPartDropdown() {
+  const typeSelect = qs("receiptRackingType");
+  const partSelect = qs("receiptPart");
+  if (!typeSelect || !partSelect) return;
+  const selectedType = typeSelect.value;
+  const previousPart = partSelect.value;
+  const parts = adminState.parts
+    .filter(p => !selectedType || p.rackingType === selectedType)
+    .slice()
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  partSelect.innerHTML = `<option value="">— Select —</option>` +
+    parts.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
+  if (previousPart && parts.some(p => p.id === previousPart)) partSelect.value = previousPart;
+  updateReceiptCostHint();
+}
+
+// Show what the currently-active cost is so admin can see what's changing
+function updateReceiptCostHint() {
+  const hint = qs("receiptCostHint");
+  const partSelect = qs("receiptPart");
+  if (!hint || !partSelect) return;
+  const partId = partSelect.value;
+  const part = adminState.parts.find(p => p.id === partId);
+  if (!part) { hint.textContent = ""; return; }
+  const currentCost = Number(part.costEach || 0);
+  hint.textContent = `Active cost on this part is currently ${money(currentCost)}. Saving will update it.`;
+}
+
+async function handleReceiptSubmit(e) {
+  e.preventDefault();
+  if (!requireAdminUser()) return;
+
+  const date = qs("receiptDate").value;
+  const supplier = qs("receiptSupplier").value.trim();
+  const po = qs("receiptPO").value.trim();
+  const partId = qs("receiptPart").value;
+  const qty = Math.floor(Number(qs("receiptQty").value || 0));
+  const cost = Number(qs("receiptCost").value || 0);
+  const notes = qs("receiptNotes").value.trim();
+
+  // Validations
+  if (!date) return showAdminMessage("Please enter the receipt date.", true);
+  if (!partId) return showAdminMessage("Please select a part.", true);
+  if (qty <= 0) return showAdminMessage("Quantity must be greater than zero.", true);
+  if (cost <= 0) return showAdminMessage("Cost per unit must be greater than zero.", true);
+
+  const part = adminState.parts.find(p => p.id === partId);
+  if (!part) return showAdminMessage("Selected part not found in inventory.", true);
+
+  const previousCost = Number(part.costEach || 0);
+  const previousQty = Number(part.currentQuantity || 0);
+  const newQty = previousQty + qty;
+  const costChanged = Math.abs(cost - previousCost) > 0.001;
+
+  const summary = `Record receipt:\n\nPart: ${part.name}\nQty received: ${qty}\nNew stock total: ${previousQty} → ${newQty}\nCost: ${money(previousCost)}${costChanged ? ` → ${money(cost)} (will update active cost)` : ` (unchanged)`}\n${supplier ? `Supplier: ${supplier}\n` : ""}${po ? `PO #: ${po}\n` : ""}\nProceed?`;
+  if (!confirm(summary)) return;
+
+  const btn = qs("receiptSubmit");
+  const user = getAdminUser();
+  btn.disabled = true;
+  btn.textContent = "Saving...";
+
+  try {
+    const receiptRef = db.collection("receipts").doc();
+    const receiptId = receiptRef.id;
+
+    // Atomic write: bump part qty + update cost + save receipt + log movement + audit
+    await db.runTransaction(async tx => {
+      const partRef = db.collection("parts").doc(partId);
+      const partDoc = await tx.get(partRef);
+      if (!partDoc.exists) throw new Error("Part no longer exists.");
+      const partData = partDoc.data();
+      const beforeQty = Number(partData.currentQuantity || 0);
+      const beforeCost = Number(partData.costEach || 0);
+      const now = firebase.firestore.FieldValue.serverTimestamp();
+
+      // Update the part: bump qty, update cost
+      tx.update(partRef, {
+        currentQuantity: beforeQty + qty,
+        costEach: cost,
+        updatedAt: now
+      });
+
+      // Save the receipt
+      tx.set(receiptRef, {
+        receiptId,
+        date,
+        supplier,
+        po,
+        partId,
+        partName: partData.name || "",
+        rackingType: partData.rackingType || "",
+        qtyReceived: qty,
+        costEach: cost,
+        previousCost: beforeCost,
+        costChanged,
+        previousQuantity: beforeQty,
+        newQuantity: beforeQty + qty,
+        notes,
+        recordedBy: user,
+        createdAt: now
+      });
+
+      // Movement record
+      tx.set(db.collection("inventory_movements").doc(), {
+        timestamp: now,
+        type: "RECEIPT",
+        partId,
+        partName: partData.name || "",
+        rackingType: partData.rackingType || "",
+        quantityChange: qty,
+        beforeQuantity: beforeQty,
+        afterQuantity: beforeQty + qty,
+        user,
+        details: { receiptId, supplier, po, costEach: cost, previousCost: beforeCost }
+      });
+
+      // Audit log
+      tx.set(db.collection("audit_log").doc(), {
+        timestamp: now,
+        admin: user,
+        action: "RECEIVE_INVENTORY",
+        target: partData.name || partId,
+        details: {
+          receiptId, partId, partName: partData.name,
+          qtyReceived: qty, costEach: cost, previousCost: beforeCost,
+          costChanged, supplier, po
+        }
+      });
+    });
+
+    showAdminMessage(`Received ${qty} × ${part.name}${costChanged ? ` (cost updated to ${money(cost)})` : ""}.`, false);
+    qs("receivingForm").reset();
+    // Set date back to today for the next entry
+    qs("receiptDate").value = new Date().toISOString().slice(0, 10);
+    updateReceiptCostHint();
+  } catch (err) {
+    console.error("Receipt save failed:", err);
+    showAdminMessage("Save failed: " + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Record Receipt";
+  }
+}
+
+function renderReceiptsTable() {
+  const body = qs("receiptsBody");
+  if (!body) return;
+  if (!adminState.receipts.length) {
+    body.innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">No receipts recorded yet. Use the form above to log incoming racking.</td></tr>`;
+    return;
+  }
+  body.innerHTML = adminState.receipts.map(r => {
+    const supplierPo = [r.supplier, r.po].filter(Boolean).join(" / ") || "—";
+    return `
+      <tr>
+        <td>${escapeHtml(r.date || "")}</td>
+        <td>
+          <strong>${escapeHtml(r.partName || "")}</strong>
+          <br><span class="muted" style="font-size:11px;">${escapeHtml(r.rackingType || "")}</span>
+        </td>
+        <td>${Number(r.qtyReceived || 0)}</td>
+        <td>
+          ${money(r.costEach)}
+          ${r.costChanged ? `<br><span class="muted" style="font-size:11px;">was ${money(r.previousCost)}</span>` : ""}
+        </td>
+        <td>${escapeHtml(supplierPo)}</td>
+        <td>${escapeHtml(r.notes || "—")}</td>
+        <td>${escapeHtml(r.recordedBy || "—")}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
 // ---------- Tab switching --------------------------------------------------
 
 function setupTabs() {
@@ -1903,6 +2104,20 @@ async function startAdmin() {
 
   const importBtn = qs("importLocationsBtn");
   if (importBtn) importBtn.addEventListener("click", importDefaultLocations);
+
+  // Receiving form
+  const receivingForm = qs("receivingForm");
+  if (receivingForm) {
+    receivingForm.addEventListener("submit", handleReceiptSubmit);
+    // Default the date to today
+    const dateInput = qs("receiptDate");
+    if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
+    // Cascade racking type → part list
+    const typeSel = qs("receiptRackingType");
+    if (typeSel) typeSel.addEventListener("change", populateReceivingPartDropdown);
+    const partSel = qs("receiptPart");
+    if (partSel) partSel.addEventListener("change", updateReceiptCostHint);
+  }
 
   attachAdminListeners();
 }

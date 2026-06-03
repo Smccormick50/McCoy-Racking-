@@ -41,6 +41,7 @@
       <button type="button" class="tab-btn" data-tab="locations">Store Locations</button>
       <button type="button" class="tab-btn" data-tab="trucks">Trucks</button>
       <button type="button" class="tab-btn" data-tab="truckInv">Truck Inventory</button>
+      <button type="button" class="tab-btn" data-tab="receiving">Receiving</button>
         <button type="button" class="tab-btn" data-tab="recovery">Recovery</button>
         <button type="button" class="tab-btn" data-tab="export">Export</button>
         <button type="button" class="tab-btn" data-tab="archived">Archived Invoices</button>
@@ -220,6 +221,71 @@
           <h2>Truck Inventory</h2>
           <p class="muted">View and edit what's currently on each truck. Use <strong>Return to Warehouse</strong> to move items back to warehouse stock. Use <strong>Invoice Damage</strong> to write off damaged items (creates a damage invoice billed to 730 Store Development).</p>
           <div id="adminTruckInvContainer"></div>
+        </div>
+      </section>
+
+      <!-- RECEIVING tab -->
+      <section id="tab-receiving" class="tab-panel">
+        <div class="panel">
+          <h2>Record New Racking Received</h2>
+          <p class="muted">Record incoming racking from a supplier. Increases inventory quantity and updates the active cost on that part. Existing invoices keep their original cost.</p>
+          <form id="receivingForm" class="grid-form">
+            <label>
+              Date Received
+              <input id="receiptDate" type="date" required>
+            </label>
+            <label>
+              Supplier
+              <input id="receiptSupplier" type="text" placeholder="e.g. Ridg-U-Rak">
+            </label>
+            <label>
+              PO / Invoice #
+              <input id="receiptPO" type="text" placeholder="e.g. PO-44821">
+            </label>
+            <label>
+              Racking Type
+              <select id="receiptRackingType" required></select>
+            </label>
+            <label class="wide">
+              Item / Part
+              <select id="receiptPart" required></select>
+            </label>
+            <label>
+              Quantity Received
+              <input id="receiptQty" type="number" min="1" step="1" placeholder="0" required>
+            </label>
+            <label>
+              Cost Each ($)
+              <input id="receiptCost" type="number" min="0" step="0.01" placeholder="0.00" required>
+              <span id="receiptCostHint" class="muted" style="font-size:11px;font-weight:normal;margin-top:2px;"></span>
+            </label>
+            <label class="wide">
+              Notes (optional)
+              <input id="receiptNotes" type="text" placeholder="e.g. Box folder, PO PDF location, or extra notes">
+            </label>
+            <button type="submit" id="receiptSubmit">Record Receipt</button>
+          </form>
+        </div>
+
+        <div class="panel">
+          <h2>Receiving History <span class="live-badge">Live</span></h2>
+          <p class="muted">Every receipt recorded.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Part</th>
+                  <th>Qty</th>
+                  <th>Cost Each</th>
+                  <th>Supplier / PO</th>
+                  <th>Notes</th>
+                  <th>Recorded By</th>
+                </tr>
+              </thead>
+              <tbody id="receiptsBody"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 

@@ -68,3 +68,21 @@ Same as setup steps 4 + 5:
 
 ## Forgot password?
 Firebase Console → Authentication → find the user → ⋮ → Reset password (sends a reset email if their email is real, OR you can just set a new password directly from the same menu).
+
+## Receiving feature setup (one time)
+
+The admin "Receiving" tab records incoming racking. To activate it after this update:
+
+### 1. Republish updated Firestore rules
+The `firestore.rules` file now includes a `receipts` collection rule. Without it, saving receipts will fail with a permission error.
+
+1. Firebase Console → Firestore → **Rules** tab
+2. Replace whatever's there with the contents of `firestore.rules` from this folder
+3. Click **Publish**
+
+### 2. Use it
+Admin → Receiving tab → fill in the form → Record Receipt.
+- Inventory quantity goes up
+- Part's "Cost Each" updates to the new price (old invoices keep their original cost)
+- All receipts appear in the Receiving History table below
+- Use the Notes field to record where the supplier PDF lives (e.g. "Box folder / PO PDFs / PO-44821")

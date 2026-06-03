@@ -95,5 +95,12 @@ service cloud.firestore {
       allow create: if signedIn();
       allow update, delete: if isAdmin();
     }
+
+    // Receiving log (incoming racking + PDF link to supplier invoice).
+    // Read: anyone signed in. Write/delete: admins only.
+    match /receipts/{receiptId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
   }
 }
