@@ -1866,47 +1866,146 @@ function renderAuditLog() {
 
 // ---------- RECEIVING tab --------------------------------------------------
 
-function populateReceivingDropdowns() {
-  const typeSelect = qs("receiptRackingType");
-  const partSelect = qs("receiptPart");
-  if (!typeSelect || !partSelect) return;
+// Working state for the in-progress receipt (cleared after successful save)
+let receiptLines = [];      // [{rackingType, partId, qty, cost}, ...]
+let expandedReceipts = new Set(); // which receipt IDs are expanded in history
 
-  // Unique racking types from parts
-  const types = [...new Set(adminState.parts.map(p => p.rackingType).filter(Boolean))].sort();
-  const previousType = typeSelect.value;
-  typeSelect.innerHTML = `<option value="">— Select —</option>` +
-    types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
-  if (previousType && types.includes(previousType)) typeSelect.value = previousType;
-
-  populateReceivingPartDropdown();
+function newEmptyReceiptLine() {
+  return { rackingType: "", partId: "", qty: "", cost: "" };
 }
 
-function populateReceivingPartDropdown() {
-  const typeSelect = qs("receiptRackingType");
-  const partSelect = qs("receiptPart");
-  if (!typeSelect || !partSelect) return;
-  const selectedType = typeSelect.value;
-  const previousPart = partSelect.value;
+function ensureAtLeastOneReceiptLine() {
+  if (receiptLines.length === 0) receiptLines.push(newEmptyReceiptLine());
+}
+
+function rackingTypeOptions(selected) {
+  const types = [...new Set(adminState.parts.map(p => p.rackingType).filter(Boolean))].sort();
+  return `<option value="">— Select —</option>` +
+    types.map(t => `<option value="${escapeHtml(t)}"${t === selected ? " selected" : ""}>${escapeHtml(t)}</option>`).join("");
+}
+
+function partOptionsForType(rackingType, selected) {
   const parts = adminState.parts
-    .filter(p => !selectedType || p.rackingType === selectedType)
+    .filter(p => !rackingType || p.rackingType === rackingType)
     .slice()
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  partSelect.innerHTML = `<option value="">— Select —</option>` +
-    parts.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
-  if (previousPart && parts.some(p => p.id === previousPart)) partSelect.value = previousPart;
-  updateReceiptCostHint();
+  return `<option value="">— Select —</option>` +
+    parts.map(p => `<option value="${escapeHtml(p.id)}"${p.id === selected ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
 }
 
-// Show what the currently-active cost is so admin can see what's changing
-function updateReceiptCostHint() {
-  const hint = qs("receiptCostHint");
-  const partSelect = qs("receiptPart");
-  if (!hint || !partSelect) return;
-  const partId = partSelect.value;
-  const part = adminState.parts.find(p => p.id === partId);
-  if (!part) { hint.textContent = ""; return; }
-  const currentCost = Number(part.costEach || 0);
-  hint.textContent = `Active cost on this part is currently ${money(currentCost)}. Saving will update it.`;
+function renderReceiptLineItems() {
+  const container = qs("receiptLineItems");
+  if (!container) return;
+  ensureAtLeastOneReceiptLine();
+
+  container.innerHTML = receiptLines.map((line, i) => {
+    const part = line.partId ? adminState.parts.find(p => p.id === line.partId) : null;
+    const currentCost = part ? Number(part.costEach || 0) : null;
+    const hint = currentCost !== null
+      ? `Active cost: ${money(currentCost)}`
+      : "";
+    const canRemove = receiptLines.length > 1;
+    return `
+      <div class="receipt-line-row" data-line-index="${i}">
+        <div class="receipt-line-grid">
+          <label>
+            <span>Racking Type</span>
+            <select class="receipt-line-type">${rackingTypeOptions(line.rackingType)}</select>
+          </label>
+          <label class="wide-part">
+            <span>Item / Part</span>
+            <select class="receipt-line-part">${partOptionsForType(line.rackingType, line.partId)}</select>
+          </label>
+          <label>
+            <span>Qty</span>
+            <input class="receipt-line-qty" type="number" min="1" step="1" value="${escapeHtml(String(line.qty))}" placeholder="0">
+          </label>
+          <label>
+            <span>Cost Each ($)</span>
+            <input class="receipt-line-cost" type="number" min="0" step="0.01" value="${escapeHtml(String(line.cost))}" placeholder="0.00">
+            <span class="receipt-line-hint muted" style="font-size:11px;font-weight:normal;">${hint}</span>
+          </label>
+          <button type="button" class="receipt-line-remove danger" ${canRemove ? "" : "disabled style='visibility:hidden;'"} title="Remove this line">×</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  // Wire up listeners for each row
+  container.querySelectorAll(".receipt-line-row").forEach(row => {
+    const i = Number(row.dataset.lineIndex);
+    const typeSel = row.querySelector(".receipt-line-type");
+    const partSel = row.querySelector(".receipt-line-part");
+    const qtyInp = row.querySelector(".receipt-line-qty");
+    const costInp = row.querySelector(".receipt-line-cost");
+    const removeBtn = row.querySelector(".receipt-line-remove");
+
+    typeSel.addEventListener("change", () => {
+      receiptLines[i].rackingType = typeSel.value;
+      receiptLines[i].partId = ""; // reset part since racking changed
+      renderReceiptLineItems();
+      updateReceiptOrderTotal();
+    });
+    partSel.addEventListener("change", () => {
+      receiptLines[i].partId = partSel.value;
+      const part = adminState.parts.find(p => p.id === partSel.value);
+      // Pre-fill cost field if it's empty, using the part's current cost
+      if (part && (receiptLines[i].cost === "" || receiptLines[i].cost === undefined)) {
+        receiptLines[i].cost = Number(part.costEach || 0).toFixed(2);
+      }
+      renderReceiptLineItems();
+      updateReceiptOrderTotal();
+    });
+    qtyInp.addEventListener("input", () => {
+      receiptLines[i].qty = qtyInp.value;
+      updateReceiptOrderTotal();
+    });
+    costInp.addEventListener("input", () => {
+      receiptLines[i].cost = costInp.value;
+      updateReceiptOrderTotal();
+    });
+    removeBtn.addEventListener("click", () => {
+      receiptLines.splice(i, 1);
+      renderReceiptLineItems();
+      updateReceiptOrderTotal();
+    });
+  });
+
+  updateReceiptOrderTotal();
+}
+
+function updateReceiptOrderTotal() {
+  const el = qs("receiptOrderTotal");
+  if (!el) return;
+  let totalQty = 0, totalValue = 0, validLines = 0;
+  for (const line of receiptLines) {
+    const qty = Math.floor(Number(line.qty || 0));
+    const cost = Number(line.cost || 0);
+    if (qty > 0 && cost > 0) {
+      totalQty += qty;
+      totalValue += qty * cost;
+      validLines++;
+    }
+  }
+  if (validLines === 0) {
+    el.textContent = "";
+  } else {
+    el.innerHTML = `<strong>${validLines}</strong> line${validLines === 1 ? "" : "s"} · <strong>${totalQty}</strong> total qty · <strong>${money(totalValue)}</strong> order value`;
+  }
+}
+
+function addReceiptLineItem() {
+  receiptLines.push(newEmptyReceiptLine());
+  renderReceiptLineItems();
+}
+
+function resetReceiptForm() {
+  receiptLines = [newEmptyReceiptLine()];
+  const form = qs("receivingForm");
+  if (form) form.reset();
+  const dateInput = qs("receiptDate");
+  if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
+  renderReceiptLineItems();
 }
 
 async function handleReceiptSubmit(e) {
@@ -1916,26 +2015,45 @@ async function handleReceiptSubmit(e) {
   const date = qs("receiptDate").value;
   const supplier = qs("receiptSupplier").value.trim();
   const po = qs("receiptPO").value.trim();
-  const partId = qs("receiptPart").value;
-  const qty = Math.floor(Number(qs("receiptQty").value || 0));
-  const cost = Number(qs("receiptCost").value || 0);
   const notes = qs("receiptNotes").value.trim();
 
-  // Validations
   if (!date) return showAdminMessage("Please enter the receipt date.", true);
-  if (!partId) return showAdminMessage("Please select a part.", true);
-  if (qty <= 0) return showAdminMessage("Quantity must be greater than zero.", true);
-  if (cost <= 0) return showAdminMessage("Cost per unit must be greater than zero.", true);
 
-  const part = adminState.parts.find(p => p.id === partId);
-  if (!part) return showAdminMessage("Selected part not found in inventory.", true);
+  // Validate and prepare line items
+  const prepared = [];
+  const seenPartIds = new Set();
+  for (let i = 0; i < receiptLines.length; i++) {
+    const line = receiptLines[i];
+    const partId = line.partId;
+    const qty = Math.floor(Number(line.qty || 0));
+    const cost = Number(line.cost || 0);
+    const skipIfEmpty = !partId && !line.qty && !line.cost;
+    if (skipIfEmpty) continue; // ignore completely empty rows
+    if (!partId) return showAdminMessage(`Line ${i + 1}: please select a part.`, true);
+    if (qty <= 0) return showAdminMessage(`Line ${i + 1}: quantity must be greater than zero.`, true);
+    if (cost <= 0) return showAdminMessage(`Line ${i + 1}: cost per unit must be greater than zero.`, true);
+    if (seenPartIds.has(partId)) {
+      const part = adminState.parts.find(p => p.id === partId);
+      return showAdminMessage(`Line ${i + 1}: "${part ? part.name : partId}" appears more than once. Combine quantities into a single line.`, true);
+    }
+    seenPartIds.add(partId);
+    const part = adminState.parts.find(p => p.id === partId);
+    if (!part) return showAdminMessage(`Line ${i + 1}: part not found in inventory.`, true);
+    prepared.push({ partId, part, qty, cost });
+  }
+  if (!prepared.length) return showAdminMessage("Add at least one line item with a part, quantity, and cost.", true);
 
-  const previousCost = Number(part.costEach || 0);
-  const previousQty = Number(part.currentQuantity || 0);
-  const newQty = previousQty + qty;
-  const costChanged = Math.abs(cost - previousCost) > 0.001;
+  // Build confirmation summary
+  let totalQty = 0, totalValue = 0;
+  const lineSummaries = prepared.map(({ part, qty, cost }) => {
+    const prevCost = Number(part.costEach || 0);
+    const changed = Math.abs(cost - prevCost) > 0.001;
+    totalQty += qty;
+    totalValue += qty * cost;
+    return `• ${part.name} — ${qty} @ ${money(cost)}${changed ? ` (was ${money(prevCost)})` : ""}`;
+  });
 
-  const summary = `Record receipt:\n\nPart: ${part.name}\nQty received: ${qty}\nNew stock total: ${previousQty} → ${newQty}\nCost: ${money(previousCost)}${costChanged ? ` → ${money(cost)} (will update active cost)` : ` (unchanged)`}\n${supplier ? `Supplier: ${supplier}\n` : ""}${po ? `PO #: ${po}\n` : ""}\nProceed?`;
+  const summary = `Record receipt:\n\n${supplier ? `Supplier: ${supplier}\n` : ""}${po ? `PO #: ${po}\n` : ""}Date: ${date}\n\nLine items (${prepared.length}):\n${lineSummaries.join("\n")}\n\nTotal: ${totalQty} units, ${money(totalValue)}\n\nProceed?`;
   if (!confirm(summary)) return;
 
   const btn = qs("receiptSubmit");
@@ -1947,76 +2065,104 @@ async function handleReceiptSubmit(e) {
     const receiptRef = db.collection("receipts").doc();
     const receiptId = receiptRef.id;
 
-    // Atomic write: bump part qty + update cost + save receipt + log movement + audit
+    // Atomic write: bump every part's qty/cost + save receipt + log movements + audit
     await db.runTransaction(async tx => {
-      const partRef = db.collection("parts").doc(partId);
-      const partDoc = await tx.get(partRef);
-      if (!partDoc.exists) throw new Error("Part no longer exists.");
-      const partData = partDoc.data();
-      const beforeQty = Number(partData.currentQuantity || 0);
-      const beforeCost = Number(partData.costEach || 0);
+      // === reads first ===
+      const partRefs = prepared.map(p => db.collection("parts").doc(p.partId));
+      const partDocs = await Promise.all(partRefs.map(ref => tx.get(ref)));
+      for (let i = 0; i < partDocs.length; i++) {
+        if (!partDocs[i].exists) throw new Error(`Part ${prepared[i].part.name} no longer exists.`);
+      }
+
       const now = firebase.firestore.FieldValue.serverTimestamp();
+      const lineItemsForDoc = [];
+      let docTotalValue = 0;
+      let docTotalQty = 0;
 
-      // Update the part: bump qty, update cost
-      tx.update(partRef, {
-        currentQuantity: beforeQty + qty,
-        costEach: cost,
-        updatedAt: now
-      });
+      // === writes ===
+      for (let i = 0; i < prepared.length; i++) {
+        const { partId, qty, cost } = prepared[i];
+        const partData = partDocs[i].data();
+        const beforeQty = Number(partData.currentQuantity || 0);
+        const beforeCost = Number(partData.costEach || 0);
+        const costChanged = Math.abs(cost - beforeCost) > 0.001;
 
-      // Save the receipt
+        // Update the part: bump qty, set new cost
+        tx.update(partRefs[i], {
+          currentQuantity: beforeQty + qty,
+          costEach: cost,
+          updatedAt: now
+        });
+
+        // Movement record (one per line item)
+        tx.set(db.collection("inventory_movements").doc(), {
+          timestamp: now,
+          type: "RECEIPT",
+          partId,
+          partName: partData.name || "",
+          rackingType: partData.rackingType || "",
+          quantityChange: qty,
+          beforeQuantity: beforeQty,
+          afterQuantity: beforeQty + qty,
+          user,
+          details: { receiptId, supplier, po, costEach: cost, previousCost: beforeCost }
+        });
+
+        lineItemsForDoc.push({
+          partId,
+          partName: partData.name || "",
+          rackingType: partData.rackingType || "",
+          qtyReceived: qty,
+          costEach: cost,
+          previousCost: beforeCost,
+          costChanged,
+          previousQuantity: beforeQty,
+          newQuantity: beforeQty + qty,
+          lineTotal: qty * cost
+        });
+        docTotalValue += qty * cost;
+        docTotalQty += qty;
+      }
+
+      // Save the single receipt doc holding all line items
       tx.set(receiptRef, {
         receiptId,
         date,
         supplier,
         po,
-        partId,
-        partName: partData.name || "",
-        rackingType: partData.rackingType || "",
-        qtyReceived: qty,
-        costEach: cost,
-        previousCost: beforeCost,
-        costChanged,
-        previousQuantity: beforeQty,
-        newQuantity: beforeQty + qty,
         notes,
+        lineItems: lineItemsForDoc,
+        totalQty: docTotalQty,
+        totalValue: docTotalValue,
         recordedBy: user,
         createdAt: now
       });
 
-      // Movement record
-      tx.set(db.collection("inventory_movements").doc(), {
-        timestamp: now,
-        type: "RECEIPT",
-        partId,
-        partName: partData.name || "",
-        rackingType: partData.rackingType || "",
-        quantityChange: qty,
-        beforeQuantity: beforeQty,
-        afterQuantity: beforeQty + qty,
-        user,
-        details: { receiptId, supplier, po, costEach: cost, previousCost: beforeCost }
-      });
-
-      // Audit log
+      // Audit log (one entry per receipt, not per line)
       tx.set(db.collection("audit_log").doc(), {
         timestamp: now,
         admin: user,
         action: "RECEIVE_INVENTORY",
-        target: partData.name || partId,
+        target: po ? `${supplier || "(no supplier)"} / ${po}` : (supplier || "Receipt"),
         details: {
-          receiptId, partId, partName: partData.name,
-          qtyReceived: qty, costEach: cost, previousCost: beforeCost,
-          costChanged, supplier, po
+          receiptId, date, supplier, po,
+          lineCount: prepared.length,
+          totalQty: docTotalQty,
+          totalValue: docTotalValue,
+          lineItems: lineItemsForDoc.map(li => ({
+            partId: li.partId,
+            partName: li.partName,
+            qty: li.qtyReceived,
+            cost: li.costEach,
+            previousCost: li.previousCost,
+            costChanged: li.costChanged
+          }))
         }
       });
     });
 
-    showAdminMessage(`Received ${qty} × ${part.name}${costChanged ? ` (cost updated to ${money(cost)})` : ""}.`, false);
-    qs("receivingForm").reset();
-    // Set date back to today for the next entry
-    qs("receiptDate").value = new Date().toISOString().slice(0, 10);
-    updateReceiptCostHint();
+    showAdminMessage(`Receipt saved: ${prepared.length} line${prepared.length === 1 ? "" : "s"}, ${totalQty} units, ${money(totalValue)}.`, false);
+    resetReceiptForm();
   } catch (err) {
     console.error("Receipt save failed:", err);
     showAdminMessage("Save failed: " + err.message, true);
@@ -2026,33 +2172,113 @@ async function handleReceiptSubmit(e) {
   }
 }
 
+// Normalize a receipt doc to always have a `lineItems` array
+// (backward compat with the old one-line-per-doc format).
+function normalizeReceipt(r) {
+  if (Array.isArray(r.lineItems) && r.lineItems.length) return r;
+  return Object.assign({}, r, {
+    lineItems: [{
+      partId: r.partId || "",
+      partName: r.partName || "",
+      rackingType: r.rackingType || "",
+      qtyReceived: Number(r.qtyReceived || 0),
+      costEach: Number(r.costEach || 0),
+      previousCost: Number(r.previousCost || 0),
+      costChanged: !!r.costChanged,
+      previousQuantity: Number(r.previousQuantity || 0),
+      newQuantity: Number(r.newQuantity || 0),
+      lineTotal: Number(r.qtyReceived || 0) * Number(r.costEach || 0)
+    }],
+    totalQty: Number(r.qtyReceived || 0),
+    totalValue: Number(r.qtyReceived || 0) * Number(r.costEach || 0)
+  });
+}
+
 function renderReceiptsTable() {
-  const body = qs("receiptsBody");
-  if (!body) return;
+  const container = qs("receiptsContainer");
+  if (!container) return;
   if (!adminState.receipts.length) {
-    body.innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center;padding:20px;">No receipts recorded yet. Use the form above to log incoming racking.</td></tr>`;
+    container.innerHTML = `<p class="muted" style="text-align:center;padding:20px;">No receipts recorded yet. Use the form above to log incoming racking.</p>`;
     return;
   }
-  body.innerHTML = adminState.receipts.map(r => {
-    const supplierPo = [r.supplier, r.po].filter(Boolean).join(" / ") || "—";
+
+  const sorted = adminState.receipts
+    .map(normalizeReceipt)
+    .slice()
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+  container.innerHTML = sorted.map(r => {
+    const isOpen = expandedReceipts.has(r.id);
+    const arrow = isOpen ? "▼" : "▶";
+    const labelPieces = [];
+    if (r.date) labelPieces.push(escapeHtml(r.date));
+    if (r.supplier) labelPieces.push(escapeHtml(r.supplier));
+    if (r.po) labelPieces.push(escapeHtml(r.po));
+    const headerLabel = labelPieces.length ? labelPieces.join(" — ") : "Receipt";
+    const lineCount = r.lineItems.length;
+
+    let body = "";
+    if (isOpen) {
+      body = `
+        <div class="receipt-card-body">
+          ${r.notes ? `<p style="margin:0 0 10px;"><strong>Notes:</strong> ${escapeHtml(r.notes)}</p>` : ""}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Racking Type</th>
+                  <th>Item / Part</th>
+                  <th>Qty</th>
+                  <th>Cost Each</th>
+                  <th>Line Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${r.lineItems.map(li => `
+                  <tr>
+                    <td>${escapeHtml(li.rackingType || "")}</td>
+                    <td>${escapeHtml(li.partName || "")}</td>
+                    <td>${Number(li.qtyReceived || 0)}</td>
+                    <td>
+                      ${money(li.costEach)}
+                      ${li.costChanged ? `<br><span class="muted" style="font-size:11px;">was ${money(li.previousCost)}</span>` : ""}
+                    </td>
+                    <td>${money(li.lineTotal || (Number(li.qtyReceived || 0) * Number(li.costEach || 0)))}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          <p class="muted" style="margin: 8px 0 0; font-size: 12px;">Recorded by ${escapeHtml(r.recordedBy || "—")}</p>
+        </div>
+      `;
+    }
+
     return `
-      <tr>
-        <td>${escapeHtml(r.date || "")}</td>
-        <td>
-          <strong>${escapeHtml(r.partName || "")}</strong>
-          <br><span class="muted" style="font-size:11px;">${escapeHtml(r.rackingType || "")}</span>
-        </td>
-        <td>${Number(r.qtyReceived || 0)}</td>
-        <td>
-          ${money(r.costEach)}
-          ${r.costChanged ? `<br><span class="muted" style="font-size:11px;">was ${money(r.previousCost)}</span>` : ""}
-        </td>
-        <td>${escapeHtml(supplierPo)}</td>
-        <td>${escapeHtml(r.notes || "—")}</td>
-        <td>${escapeHtml(r.recordedBy || "—")}</td>
-      </tr>
+      <div class="receipt-card">
+        <button type="button" class="receipt-card-header" data-toggle-receipt="${escapeHtml(r.id)}">
+          <span style="font-size:18px;margin-right:8px;">${arrow}</span>
+          <strong style="font-size:15px;">${headerLabel}</strong>
+          <span class="muted" style="margin-left:auto;">${lineCount} item${lineCount === 1 ? "" : "s"} · ${r.totalQty} qty · ${money(r.totalValue)}</span>
+        </button>
+        ${body}
+      </div>
     `;
   }).join("");
+
+  container.querySelectorAll("button[data-toggle-receipt]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.toggleReceipt;
+      if (expandedReceipts.has(id)) expandedReceipts.delete(id);
+      else expandedReceipts.add(id);
+      renderReceiptsTable();
+    });
+  });
+}
+
+// When parts change, re-render the line item rows so dropdowns are fresh
+function populateReceivingDropdowns() {
+  renderReceiptLineItems();
 }
 
 // ---------- Tab switching --------------------------------------------------
@@ -2105,18 +2331,19 @@ async function startAdmin() {
   const importBtn = qs("importLocationsBtn");
   if (importBtn) importBtn.addEventListener("click", importDefaultLocations);
 
-  // Receiving form
+  // Receiving form (multi-line)
   const receivingForm = qs("receivingForm");
   if (receivingForm) {
     receivingForm.addEventListener("submit", handleReceiptSubmit);
     // Default the date to today
     const dateInput = qs("receiptDate");
     if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
-    // Cascade racking type → part list
-    const typeSel = qs("receiptRackingType");
-    if (typeSel) typeSel.addEventListener("change", populateReceivingPartDropdown);
-    const partSel = qs("receiptPart");
-    if (partSel) partSel.addEventListener("change", updateReceiptCostHint);
+    // Initial blank line
+    receiptLines = [newEmptyReceiptLine()];
+    renderReceiptLineItems();
+    // "+ Add Line Item" button
+    const addBtn = qs("addReceiptLineBtn");
+    if (addBtn) addBtn.addEventListener("click", addReceiptLineItem);
   }
 
   attachAdminListeners();

@@ -228,64 +228,45 @@
       <section id="tab-receiving" class="tab-panel">
         <div class="panel">
           <h2>Record New Racking Received</h2>
-          <p class="muted">Record incoming racking from a supplier. Increases inventory quantity and updates the active cost on that part. Existing invoices keep their original cost.</p>
-          <form id="receivingForm" class="grid-form">
-            <label>
-              Date Received
-              <input id="receiptDate" type="date" required>
-            </label>
-            <label>
-              Supplier
-              <input id="receiptSupplier" type="text" placeholder="e.g. Ridg-U-Rak">
-            </label>
-            <label>
-              PO / Invoice #
-              <input id="receiptPO" type="text" placeholder="e.g. PO-44821">
-            </label>
-            <label>
-              Racking Type
-              <select id="receiptRackingType" required></select>
-            </label>
-            <label class="wide">
-              Item / Part
-              <select id="receiptPart" required></select>
-            </label>
-            <label>
-              Quantity Received
-              <input id="receiptQty" type="number" min="1" step="1" placeholder="0" required>
-            </label>
-            <label>
-              Cost Each ($)
-              <input id="receiptCost" type="number" min="0" step="0.01" placeholder="0.00" required>
-              <span id="receiptCostHint" class="muted" style="font-size:11px;font-weight:normal;margin-top:2px;"></span>
-            </label>
-            <label class="wide">
-              Notes (optional)
-              <input id="receiptNotes" type="text" placeholder="e.g. Box folder, PO PDF location, or extra notes">
-            </label>
-            <button type="submit" id="receiptSubmit">Record Receipt</button>
+          <p class="muted">Record an incoming supplier order. You can add multiple line items to one receipt — they share the same date, supplier, and PO #. Inventory quantities go up and each part's active cost updates. Existing invoices keep their original cost.</p>
+          <form id="receivingForm">
+            <!-- Order header (shared across all line items) -->
+            <div class="grid-form" style="margin-bottom: 8px;">
+              <label>
+                Date Received
+                <input id="receiptDate" type="date" required>
+              </label>
+              <label>
+                Supplier
+                <input id="receiptSupplier" type="text" placeholder="e.g. Ridg-U-Rak">
+              </label>
+              <label>
+                PO / Invoice #
+                <input id="receiptPO" type="text" placeholder="e.g. PO-44821">
+              </label>
+              <label class="wide">
+                Notes (optional)
+                <input id="receiptNotes" type="text" placeholder="e.g. Box folder, PDF location, or extra notes">
+              </label>
+            </div>
+
+            <!-- Line items list -->
+            <h3 style="margin-top: 18px; margin-bottom: 8px;">Line Items</h3>
+            <div id="receiptLineItems"></div>
+            <button type="button" id="addReceiptLineBtn" class="secondary" style="margin-top: 8px;">+ Add Line Item</button>
+
+            <!-- Order total + submit -->
+            <div style="margin-top: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+              <div id="receiptOrderTotal" class="muted"></div>
+              <button type="submit" id="receiptSubmit">Record Receipt</button>
+            </div>
           </form>
         </div>
 
         <div class="panel">
           <h2>Receiving History <span class="live-badge">Live</span></h2>
-          <p class="muted">Every receipt recorded.</p>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Part</th>
-                  <th>Qty</th>
-                  <th>Cost Each</th>
-                  <th>Supplier / PO</th>
-                  <th>Notes</th>
-                  <th>Recorded By</th>
-                </tr>
-              </thead>
-              <tbody id="receiptsBody"></tbody>
-            </table>
-          </div>
+          <p class="muted">Every supplier order recorded. Click an order to see all its line items.</p>
+          <div id="receiptsContainer"></div>
         </div>
       </section>
 
