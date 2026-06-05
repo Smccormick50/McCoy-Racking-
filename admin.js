@@ -1730,6 +1730,178 @@ function buildAndDownloadInvoicePdf(invoice) {
   doc.save(`${invoice.invoiceNumber}.pdf`);
 }
 
+// Builds a "Racking Received" PDF for a given receipt (from the Receiving tab).
+// Acts as the receiving record — replaces the need to upload the supplier's actual PDF.
+function buildAndDownloadReceiptPdf(receipt) {
+  if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+    showAdminMessage("PDF library didn't load. Check your internet connection and refresh the page.", true);
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  if (typeof doc.autoTable !== "function") {
+    showAdminMessage("PDF table library didn't load. Check your internet connection and refresh the page.", true);
+    return;
+  }
+  const r = normalizeReceipt(receipt);
+  const lineItems = Array.isArray(r.lineItems) ? r.lineItems : [];
+
+  const GREEN_DARK = [15, 58, 42];
+  const GREEN_MID  = [22, 107, 70];
+  const YELLOW     = [245, 209, 22];
+  const PAGE_W     = doc.internal.pageSize.getWidth();
+
+  // ===== HEADER BAND =====
+  doc.setFillColor(...GREEN_DARK);
+  doc.rect(0, 0, PAGE_W, 32, "F");
+  doc.setFillColor(...YELLOW);
+  doc.rect(0, 32, PAGE_W, 2, "F");
+
+  doc.setTextColor(...YELLOW);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(22);
+  doc.text("Mc Racking", 14, 16);
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  const hq = [
+    "McCoy Corporation Headquarters",
+    "1350 N I.H. 35",
+    "San Marcos, TX 78666"
+  ];
+  let hqY = 12;
+  for (const line of hq) {
+    doc.text(line, PAGE_W - 14, hqY, { align: "right" });
+    hqY += 5;
+  }
+
+  // ===== TITLE =====
+  doc.setTextColor(...GREEN_DARK);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.text("RACKING RECEIVED", 14, 46);
+
+  // ===== LEFT METADATA =====
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(80, 80, 80);
+  doc.text("DATE", 14, 56);
+  if (r.recordedBy) doc.text("RECORDED BY", 14, 66);
+
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(0, 0, 0);
+  doc.setFontSize(11);
+  doc.text(formatDate(r.date) || "", 50, 56);
+  if (r.recordedBy) doc.text(r.recordedBy, 50, 66);
+
+  // ===== RECEIVED FROM BOX (right side) =====
+  const boxX = 115, boxY = 50, boxW = 81, boxH = 38;
+  doc.setDrawColor(...GREEN_MID);
+  doc.setLineWidth(0.5);
+  doc.rect(boxX, boxY, boxW, boxH, "S");
+  doc.setFillColor(...GREEN_DARK);
+  doc.rect(boxX, boxY, boxW, 6, "F");
+  doc.setTextColor(...YELLOW);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("RECEIVED FROM", boxX + 3, boxY + 4.4);
+
+  doc.setTextColor(0, 0, 0);
+  let by = boxY + 12;
+  if (r.supplier) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(r.supplier, boxX + 3, by);
+    by += 6;
+  } else {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(10);
+    doc.setTextColor(150, 150, 150);
+    doc.text("(no supplier on file)", boxX + 3, by);
+    doc.setTextColor(0, 0, 0);
+    by += 6;
+  }
+  if (r.po) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text("PO / INVOICE #", boxX + 3, by);
+    by += 4.5;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(0, 0, 0);
+    doc.text(r.po, boxX + 3, by);
+    by += 5;
+  }
+
+  // ===== LINE ITEMS TABLE =====
+  const tableStartY = Math.max(78, boxY + boxH + 6);
+  doc.autoTable({
+    startY: tableStartY,
+    head: [["Racking Type", "Item / Part", "Qty Received", "Cost Each", "Line Total"]],
+    body: lineItems.map(li => [
+      li.rackingType || "",
+      li.partName || "",
+      Number(li.qtyReceived || 0),
+      money(li.costEach),
+      money(li.lineTotal || (Number(li.qtyReceived || 0) * Number(li.costEach || 0)))
+    ]),
+    headStyles: { fillColor: GREEN_DARK, textColor: YELLOW, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    styles: { fontSize: 10, cellPadding: 3 },
+    columnStyles: { 2: { halign: "right" }, 3: { halign: "right" }, 4: { halign: "right" } },
+    margin: { left: 14, right: 14 }
+  });
+
+  // ===== TOTAL BAR =====
+  let finalY = doc.lastAutoTable.finalY + 6;
+  doc.setFillColor(...GREEN_DARK);
+  doc.rect(14, finalY, PAGE_W - 28, 12, "F");
+  doc.setTextColor(...YELLOW);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("RECEIPT TOTAL", 18, finalY + 8);
+  doc.text(money(r.totalValue || 0), PAGE_W - 18, finalY + 8, { align: "right" });
+
+  finalY += 22;
+  doc.setTextColor(0, 0, 0);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  if (r.notes) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Notes:", 14, finalY);
+    finalY += 6;
+    doc.setFont("helvetica", "normal");
+    const wrapped = doc.splitTextToSize(String(r.notes), PAGE_W - 28);
+    doc.text(wrapped, 14, finalY);
+    finalY += wrapped.length * 5 + 8;
+  }
+  doc.text("Received Signature: ______________________________", 14, finalY);
+
+  // Footer
+  doc.setTextColor(120, 120, 120);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.text("Mc Racking - McCoy Corporation Headquarters - 1350 N I.H. 35, San Marcos, TX 78666",
+           PAGE_W / 2, doc.internal.pageSize.getHeight() - 8, { align: "center" });
+
+  // Filename: Receipt-YYYY-MM-DD-Supplier-PO.pdf (sanitized)
+  const safe = s => String(s || "").replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  const parts = ["Receipt", r.date, safe(r.supplier), safe(r.po)].filter(Boolean);
+  const filename = parts.join("-") + ".pdf";
+  doc.save(filename);
+}
+
+function downloadReceiptPdf(receiptId) {
+  const receipt = adminState.receipts.find(r => r.id === receiptId);
+  if (!receipt) {
+    showAdminMessage("Receipt not found.", true);
+    return;
+  }
+  buildAndDownloadReceiptPdf(receipt);
+}
+
 function exportArchivedMonth(monthKey) {
   if (typeof XLSX === "undefined") {
     showAdminMessage("Excel library failed to load. Check your internet connection and try again.", true);
@@ -2256,11 +2428,14 @@ function renderReceiptsTable() {
 
     return `
       <div class="receipt-card">
-        <button type="button" class="receipt-card-header" data-toggle-receipt="${escapeHtml(r.id)}">
-          <span style="font-size:18px;margin-right:8px;">${arrow}</span>
-          <strong style="font-size:15px;">${headerLabel}</strong>
-          <span class="muted" style="margin-left:auto;">${lineCount} item${lineCount === 1 ? "" : "s"} · ${r.totalQty} qty · ${money(r.totalValue)}</span>
-        </button>
+        <div class="receipt-card-header-row">
+          <button type="button" class="receipt-card-header" data-toggle-receipt="${escapeHtml(r.id)}">
+            <span style="font-size:18px;margin-right:8px;">${arrow}</span>
+            <strong style="font-size:15px;">${headerLabel}</strong>
+            <span class="muted" style="margin-left:auto;">${lineCount} item${lineCount === 1 ? "" : "s"} · ${r.totalQty} qty · ${money(r.totalValue)}</span>
+          </button>
+          <button type="button" class="receipt-card-pdf" data-receipt-pdf="${escapeHtml(r.id)}" title="Download receipt PDF">PDF</button>
+        </div>
         ${body}
       </div>
     `;
@@ -2273,6 +2448,10 @@ function renderReceiptsTable() {
       else expandedReceipts.add(id);
       renderReceiptsTable();
     });
+  });
+
+  container.querySelectorAll("button[data-receipt-pdf]").forEach(btn => {
+    btn.addEventListener("click", () => downloadReceiptPdf(btn.dataset.receiptPdf));
   });
 }
 

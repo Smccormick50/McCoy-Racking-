@@ -896,3 +896,27 @@ input.cell-edit:focus {
   padding: 14px 16px;
   border-top: 1px solid #e2e8f0;
 }
+
+/* Receipt card header row: toggle button + PDF button */
+.receipt-card-header-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+.receipt-card-header-row .receipt-card-header {
+  flex: 1;
+  border-right: 1px solid #e2e8f0;
+}
+.receipt-card-pdf {
+  padding: 0 18px;
+  border-radius: 0;
+  background: #166b46;
+  color: #f5d116;
+  font-weight: bold;
+  border: 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+.receipt-card-pdf:hover {
+  background: #0f3a2a;
+}
