@@ -313,6 +313,7 @@ function onDataChanged() {
   renderInventoryTable();
   renderTruckInventoryTable();
   renderInvoiceTable();
+  renderRackingReferences();
   refreshAllLineInfo();
   // If line items haven't been initialized yet, do it once parts are loaded
   if (initialPartsLoaded && qs("lineItems").children.length === 0) {
@@ -558,6 +559,73 @@ function renderInventoryTable() {
     `;
   }).join("");
   qs("inventoryBody").innerHTML = rows;
+}
+
+// ---------- Racking Type Reference (PDFs per racking type) -----------------
+
+// Map of racking type name → reference PDF filename in this folder.
+// To add a new reference: drop the PDF in the repo root and add an entry here.
+const RACKING_TYPE_REFERENCES = {
+  "Pigeon Hole Rack": "pigeon_hole_uprights.pdf"
+};
+
+let expandedRackingRef = null;
+
+function renderRackingReferences() {
+  const container = qs("rackingReferenceContainer");
+  if (!container) return;
+
+  // Unique racking types from the live parts list
+  const allTypes = [...new Set(state.parts.map(p => p.rackingType).filter(Boolean))].sort();
+
+  if (!allTypes.length) {
+    container.innerHTML = `<p class="muted" style="margin:0;">No racking types defined yet.</p>`;
+    return;
+  }
+
+  container.innerHTML = allTypes.map(type => {
+    const pdfFile = RACKING_TYPE_REFERENCES[type] || null;
+    const isOpen = expandedRackingRef === type;
+    const arrow = pdfFile ? (isOpen ? "▼" : "▶") : "•";
+    const rightLabel = pdfFile ? "View Reference" : "No reference available yet";
+
+    let body = "";
+    if (isOpen && pdfFile) {
+      const safe = escapeHtml(pdfFile);
+      body = `
+        <div class="racking-ref-body">
+          <p style="margin: 0 0 10px;">
+            <a href="${safe}" target="_blank" rel="noopener">Open in new tab ↗</a>
+            <span class="muted"> · </span>
+            <a href="${safe}" download>Download PDF</a>
+          </p>
+          <iframe src="${safe}" class="racking-ref-iframe" title="${escapeHtml(type)} reference"></iframe>
+          <p class="muted" style="margin: 8px 0 0; font-size: 12px;">
+            On mobile, the embedded view may not render — use "Open in new tab" or "Download PDF" above.
+          </p>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="racking-ref-card">
+        <button type="button" class="racking-ref-header" data-toggle-rackingref="${escapeHtml(type)}" ${pdfFile ? "" : "disabled"}>
+          <span style="font-size: 18px; margin-right: 8px;">${arrow}</span>
+          <strong style="font-size: 15px;">${escapeHtml(type)}</strong>
+          <span class="muted" style="margin-left: auto; font-size: 13px;">${rightLabel}</span>
+        </button>
+        ${body}
+      </div>
+    `;
+  }).join("");
+
+  container.querySelectorAll("button[data-toggle-rackingref]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const type = btn.dataset.toggleRackingref;
+      expandedRackingRef = (expandedRackingRef === type) ? null : type;
+      renderRackingReferences();
+    });
+  });
 }
 
 function renderTruckInventoryTable() {
