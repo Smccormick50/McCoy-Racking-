@@ -313,7 +313,7 @@ function onDataChanged() {
   renderInventoryTable();
   renderTruckInventoryTable();
   renderInvoiceTable();
-  populateInvoicePartSuggestions();
+  populateInvoiceSearchRackingTypes();
   // Keep an active search current as live invoice data changes.
   if ((qs("invoiceSearchPart")?.value || "") || (qs("invoiceSearchFrom")?.value || "") || (qs("invoiceSearchTo")?.value || "")) renderInvoiceSearchResults();
   renderRackingReferences();
@@ -749,13 +749,67 @@ function normalizeInvoiceDateForSearch(value) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
-function populateInvoicePartSuggestions() {
-  const list = qs("invoicePartSuggestions");
-  if (!list) return;
-  const names = new Set();
-  state.parts.forEach(p => { if (p.partName) names.add(p.partName); });
-  state.invoices.forEach(inv => getInvoiceLineItems(inv).forEach(line => { if (line.partName) names.add(line.partName); }));
-  list.innerHTML = [...names].sort((a,b) => a.localeCompare(b)).map(name => `<option value="${escapeHtml(name)}"></option>`).join("");
+function getInvoiceSearchCatalog() {
+  const catalog = [];
+  const seen = new Set();
+
+  // Current parts from inventory.
+  getAllPartsForDropdowns().forEach(part => {
+    const type = String(part.rackingType || "").trim();
+    const name = String(part.name || part.partName || "").trim();
+    const id = String(part.id || "").trim();
+    if (!type || !name) return;
+    const key = `${type.toLowerCase()}||${name.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    catalog.push({ id, rackingType: type, name });
+  });
+
+  // Also include parts found on old invoices, even if a part was later removed from inventory.
+  state.invoices.forEach(inv => getInvoiceLineItems(inv).forEach(line => {
+    const type = String(line.rackingType || "").trim();
+    const name = String(line.partName || "").trim();
+    const id = String(line.partId || "").trim();
+    if (!type || !name) return;
+    const key = `${type.toLowerCase()}||${name.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    catalog.push({ id, rackingType: type, name });
+  }));
+
+  return catalog.sort((a, b) => a.rackingType.localeCompare(b.rackingType) || a.name.localeCompare(b.name));
+}
+
+function populateInvoiceSearchRackingTypes() {
+  const typeSelect = qs("invoiceSearchRackingType");
+  if (!typeSelect) return;
+  const current = typeSelect.value;
+  const types = [...new Set(getInvoiceSearchCatalog().map(p => p.rackingType).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  typeSelect.innerHTML = `<option value="">— Select racking type —</option>` +
+    types.map(type => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join("");
+  if (current && types.includes(current)) typeSelect.value = current;
+  updateInvoiceSearchPartList();
+}
+
+function updateInvoiceSearchPartList() {
+  const typeSelect = qs("invoiceSearchRackingType");
+  const partSelect = qs("invoiceSearchPart");
+  if (!typeSelect || !partSelect) return;
+  const type = typeSelect.value;
+  const current = partSelect.value;
+
+  if (!type) {
+    partSelect.innerHTML = `<option value="">— Select racking type first —</option>`;
+    partSelect.disabled = true;
+    return;
+  }
+
+  const parts = getInvoiceSearchCatalog().filter(p => p.rackingType === type);
+  partSelect.disabled = false;
+  partSelect.innerHTML = `<option value="">— All parts in ${escapeHtml(type)} —</option>` +
+    parts.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+  if (current && parts.some(p => p.name === current)) partSelect.value = current;
 }
 
 function renderInvoiceSearchResults() {
@@ -764,13 +818,14 @@ function renderInvoiceSearchResults() {
   const locationsBox = qs("invoiceSearchLocations");
   if (!body || !summary || !locationsBox) return;
 
-  const term = (qs("invoiceSearchPart")?.value || "").trim().toLowerCase();
+  const selectedType = qs("invoiceSearchRackingType")?.value || "";
+  const selectedPart = qs("invoiceSearchPart")?.value || "";
   const from = qs("invoiceSearchFrom")?.value || "";
   const to = qs("invoiceSearchTo")?.value || "";
 
-  if (!term && !from && !to) {
-    body.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">Enter a part name and/or date range, then click Search.</td></tr>`;
-    summary.textContent = "Enter a part name and/or date range, then click Search.";
+  if (!selectedType && !from && !to) {
+    body.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">Select a racking type and part, and/or choose a date range, then click Search.</td></tr>`;
+    summary.textContent = "Select a racking type and part, and/or choose a date range, then click Search.";
     locationsBox.innerHTML = "";
     return;
   }
@@ -787,8 +842,8 @@ function renderInvoiceSearchResults() {
     if (from && (!isoDate || isoDate < from)) continue;
     if (to && (!isoDate || isoDate > to)) continue;
     for (const line of getInvoiceLineItems(inv)) {
-      const haystack = `${line.partName || ""} ${line.rackingType || ""}`.toLowerCase();
-      if (term && !haystack.includes(term)) continue;
+      if (selectedType && String(line.rackingType || "") !== selectedType) continue;
+      if (selectedPart && String(line.partName || "") !== selectedPart) continue;
       matches.push({ inv, line, isoDate });
     }
   }
@@ -829,7 +884,11 @@ function renderInvoiceSearchResults() {
 }
 
 function clearInvoiceSearch() {
-  if (qs("invoiceSearchPart")) qs("invoiceSearchPart").value = "";
+  if (qs("invoiceSearchRackingType")) qs("invoiceSearchRackingType").value = "";
+  if (qs("invoiceSearchPart")) {
+    qs("invoiceSearchPart").innerHTML = `<option value="">— Select racking type first —</option>`;
+    qs("invoiceSearchPart").disabled = true;
+  }
   if (qs("invoiceSearchFrom")) qs("invoiceSearchFrom").value = "";
   if (qs("invoiceSearchTo")) qs("invoiceSearchTo").value = "";
   renderInvoiceSearchResults();
@@ -1772,7 +1831,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   qs("cancelEditButton").addEventListener("click", () => cancelEditInvoice(false));
   if (qs("invoiceSearchButton")) qs("invoiceSearchButton").addEventListener("click", renderInvoiceSearchResults);
   if (qs("invoiceSearchClear")) qs("invoiceSearchClear").addEventListener("click", clearInvoiceSearch);
-  if (qs("invoiceSearchPart")) qs("invoiceSearchPart").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); renderInvoiceSearchResults(); } });
+  if (qs("invoiceSearchRackingType")) qs("invoiceSearchRackingType").addEventListener("change", updateInvoiceSearchPartList);
 
   // Render initial empty UI
   renderSelects();

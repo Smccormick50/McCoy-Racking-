@@ -123,12 +123,19 @@
 
     <section class="panel" id="invoiceSearchPanel">
       <h2>Search Invoice History</h2>
-      <p class="muted">Search a part to see which invoices used it, how many pieces were invoiced, and where they were used. You can also limit the search to a date range.</p>
+      <p class="muted">First select the racking type, then select the part. The search shows where the part was invoiced and how many pieces were used. You can also limit the results to a date range.</p>
       <div class="invoice-search-grid">
         <label>
+          Racking Type
+          <select id="invoiceSearchRackingType">
+            <option value="">— Select racking type —</option>
+          </select>
+        </label>
+        <label>
           Part / Item
-          <input id="invoiceSearchPart" type="search" list="invoicePartSuggestions" placeholder="Type a part name or racking type">
-          <datalist id="invoicePartSuggestions"></datalist>
+          <select id="invoiceSearchPart" disabled>
+            <option value="">— Select racking type first —</option>
+          </select>
         </label>
         <label>
           From Date
@@ -143,7 +150,7 @@
           <button id="invoiceSearchClear" type="button" class="secondary">Clear</button>
         </div>
       </div>
-      <div id="invoiceSearchSummary" class="invoice-search-summary muted">Enter a part name and/or date range, then click Search.</div>
+      <div id="invoiceSearchSummary" class="invoice-search-summary muted">Select a racking type and part, and/or choose a date range, then click Search.</div>
       <div class="table-wrap">
         <table>
           <thead>
