@@ -96,6 +96,7 @@ function attachAdminListeners() {
     });
     renderPartsTable();
     populateReceivingDropdowns();
+    populateAdminInvoiceSearchRackingTypes();
     updateExportCounts();
     setConnectionStatus("Live", "connected");
   }, err => {
@@ -166,6 +167,8 @@ function attachAdminListeners() {
     snap.forEach(d => adminState.invoices.push(d.data()));
     updateExportCounts();
     renderArchivedMonths();
+    populateAdminInvoiceSearchRackingTypes();
+    if ((qs("invoiceSearchRackingType")?.value || "") || (qs("invoiceSearchFrom")?.value || "") || (qs("invoiceSearchTo")?.value || "")) renderAdminInvoiceSearchResults();
   });
 
   db.collection("receipts").orderBy("date", "desc").onSnapshot(snap => {
@@ -1508,6 +1511,97 @@ function downloadArchivedInvoicePdf(invoiceNumber) {
   buildAndDownloadInvoicePdf(invoice);
 }
 
+// ---------- INVOICE SEARCH tab ---------------------------------------------
+
+function normalizeInvoiceDateForSearch(value) {
+  const raw = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw);
+  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed)) return "";
+  const d = new Date(parsed);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function getAdminInvoiceSearchCatalog() {
+  const catalog = [], seen = new Set();
+  adminState.parts.forEach(part => {
+    const type = String(part.rackingType || "").trim();
+    const name = String(part.name || part.partName || "").trim();
+    if (!type || !name) return;
+    const key = `${type.toLowerCase()}||${name.toLowerCase()}`;
+    if (!seen.has(key)) { seen.add(key); catalog.push({ rackingType:type, name }); }
+  });
+  adminState.invoices.forEach(inv => getInvoiceLineItems(inv).forEach(line => {
+    const type = String(line.rackingType || "").trim();
+    const name = String(line.partName || "").trim();
+    if (!type || !name) return;
+    const key = `${type.toLowerCase()}||${name.toLowerCase()}`;
+    if (!seen.has(key)) { seen.add(key); catalog.push({ rackingType:type, name }); }
+  }));
+  return catalog.sort((a,b) => a.rackingType.localeCompare(b.rackingType) || a.name.localeCompare(b.name));
+}
+
+function populateAdminInvoiceSearchRackingTypes() {
+  const sel = qs("invoiceSearchRackingType");
+  if (!sel) return;
+  const current = sel.value;
+  const types = [...new Set(getAdminInvoiceSearchCatalog().map(p => p.rackingType))].sort((a,b)=>a.localeCompare(b));
+  sel.innerHTML = `<option value="">— Select racking type —</option>` + types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+  if (current && types.includes(current)) sel.value = current;
+  updateAdminInvoiceSearchPartList();
+}
+
+function updateAdminInvoiceSearchPartList() {
+  const typeSel=qs("invoiceSearchRackingType"), partSel=qs("invoiceSearchPart");
+  if (!typeSel || !partSel) return;
+  const type=typeSel.value, current=partSel.value;
+  if (!type) { partSel.innerHTML=`<option value="">— Select racking type first —</option>`; partSel.disabled=true; return; }
+  const parts=getAdminInvoiceSearchCatalog().filter(p=>p.rackingType===type);
+  partSel.disabled=false;
+  partSel.innerHTML=`<option value="">— All parts in ${escapeHtml(type)} —</option>` + parts.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+  if (current && parts.some(p=>p.name===current)) partSel.value=current;
+}
+
+function renderAdminInvoiceSearchResults() {
+  const body=qs("invoiceSearchBody"), summary=qs("invoiceSearchSummary"), locationsBox=qs("invoiceSearchLocations");
+  if (!body || !summary || !locationsBox) return;
+  const selectedType=qs("invoiceSearchRackingType")?.value||"", selectedPart=qs("invoiceSearchPart")?.value||"";
+  const from=qs("invoiceSearchFrom")?.value||"", to=qs("invoiceSearchTo")?.value||"";
+  if (!selectedType && !from && !to) { body.innerHTML=`<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">Select a racking type and part, and/or choose a date range, then click Search.</td></tr>`; summary.textContent="Select a racking type and part, and/or choose a date range, then click Search."; locationsBox.innerHTML=""; return; }
+  if (from && to && from>to) { body.innerHTML=`<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">The From Date must be before the To Date.</td></tr>`; summary.textContent="Please correct the date range."; locationsBox.innerHTML=""; return; }
+  const matches=[];
+  adminState.invoices.forEach(inv => {
+    const isoDate=normalizeInvoiceDateForSearch(inv.date);
+    if (from && (!isoDate || isoDate<from)) return;
+    if (to && (!isoDate || isoDate>to)) return;
+    getInvoiceLineItems(inv).forEach(line => {
+      if (selectedType && String(line.rackingType||"")!==selectedType) return;
+      if (selectedPart && String(line.partName||"")!==selectedPart) return;
+      matches.push({inv,line,isoDate});
+    });
+  });
+  matches.sort((a,b)=>(b.isoDate||"").localeCompare(a.isoDate||"") || String(b.inv.invoiceNumber||"").localeCompare(String(a.inv.invoiceNumber||"")));
+  const totalQty=matches.reduce((n,r)=>n+Number(r.line.quantityUsed||0),0);
+  const invoiceCount=new Set(matches.map(r=>r.inv.invoiceNumber)).size;
+  const locationTotals=new Map();
+  matches.forEach(r=>{ const loc=r.inv.location||"Unknown"; locationTotals.set(loc,(locationTotals.get(loc)||0)+Number(r.line.quantityUsed||0)); });
+  summary.innerHTML=matches.length ? `<strong>${totalQty.toLocaleString()}</strong> piece${totalQty===1?"":"s"} found across <strong>${invoiceCount}</strong> invoice${invoiceCount===1?"":"s"} at <strong>${locationTotals.size}</strong> location${locationTotals.size===1?"":"s"}.` : "No matching invoice line items were found.";
+  if (!matches.length) { body.innerHTML=`<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No results found for this search.</td></tr>`; locationsBox.innerHTML=""; return; }
+  body.innerHTML=matches.map(({inv,line})=>`<tr><td>${escapeHtml(formatDate(inv.date))}</td><td><strong>${escapeHtml(inv.invoiceNumber||"—")}</strong></td><td>${escapeHtml(inv.location||"—")}</td><td>${escapeHtml(inv.truck||"—")}</td><td>${escapeHtml(line.rackingType||"—")}</td><td>${escapeHtml(line.partName||"—")}</td><td><strong>${Number(line.quantityUsed||0).toLocaleString()}</strong></td><td>${escapeHtml(inv.user||inv.createdBy||"—")}</td></tr>`).join("");
+  const rows=[...locationTotals.entries()].sort((a,b)=>b[1]-a[1]);
+  locationsBox.innerHTML=`<h3 style="margin-top:18px;">Pieces by Location</h3><div class="search-location-chips">${rows.map(([loc,qty])=>`<span class="search-location-chip"><strong>${escapeHtml(loc)}</strong>: ${qty.toLocaleString()}</span>`).join("")}</div>`;
+}
+
+function clearAdminInvoiceSearch() {
+  if (qs("invoiceSearchRackingType")) qs("invoiceSearchRackingType").value="";
+  if (qs("invoiceSearchPart")) { qs("invoiceSearchPart").innerHTML=`<option value="">— Select racking type first —</option>`; qs("invoiceSearchPart").disabled=true; }
+  if (qs("invoiceSearchFrom")) qs("invoiceSearchFrom").value="";
+  if (qs("invoiceSearchTo")) qs("invoiceSearchTo").value="";
+  renderAdminInvoiceSearchResults();
+}
+
 // ---- Helper functions for PDF generation (copied from app.js) ----
 
 function formatDate(stored) {
@@ -2497,6 +2591,10 @@ async function startAdmin() {
   if (signOutBtn) signOutBtn.addEventListener("click", signOutAndGoToLogin);
 
   setupTabs();
+
+  if (qs("invoiceSearchButton")) qs("invoiceSearchButton").addEventListener("click", renderAdminInvoiceSearchResults);
+  if (qs("invoiceSearchClear")) qs("invoiceSearchClear").addEventListener("click", clearAdminInvoiceSearch);
+  if (qs("invoiceSearchRackingType")) qs("invoiceSearchRackingType").addEventListener("change", updateAdminInvoiceSearchPartList);
 
   qs("addPartForm").addEventListener("submit", addNewPart);
   qs("addUserForm").addEventListener("submit", addUser);

@@ -44,6 +44,7 @@
       <button type="button" class="tab-btn" data-tab="receiving">Receiving</button>
         <button type="button" class="tab-btn" data-tab="recovery">Recovery</button>
         <button type="button" class="tab-btn" data-tab="export">Export</button>
+        <button type="button" class="tab-btn" data-tab="invoiceSearch">Invoice Search</button>
         <button type="button" class="tab-btn" data-tab="archived">Archived Invoices</button>
         <button type="button" class="tab-btn" data-tab="audit">Audit Log</button>
       </nav>
@@ -314,6 +315,33 @@
               <button id="exportInvoicesBtn">Download Invoices .xlsx</button>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- INVOICE SEARCH tab -->
+      <section id="tab-invoiceSearch" class="tab-panel">
+        <div class="panel" id="invoiceSearchPanel">
+          <h2>Search Invoice History <span class="live-badge">Live</span></h2>
+          <p class="muted">First select the racking type, then select the part. The search shows where the part was invoiced and how many pieces were used. You can also limit the results to a date range.</p>
+          <div class="invoice-search-grid">
+            <label>Racking Type
+              <select id="invoiceSearchRackingType"><option value="">— Select racking type —</option></select>
+            </label>
+            <label>Part / Item
+              <select id="invoiceSearchPart" disabled><option value="">— Select racking type first —</option></select>
+            </label>
+            <label>From Date <input id="invoiceSearchFrom" type="date"></label>
+            <label>To Date <input id="invoiceSearchTo" type="date"></label>
+            <div class="invoice-search-actions">
+              <button id="invoiceSearchButton" type="button">Search</button>
+              <button id="invoiceSearchClear" type="button" class="secondary">Clear</button>
+            </div>
+          </div>
+          <div id="invoiceSearchSummary" class="invoice-search-summary muted">Select a racking type and part, and/or choose a date range, then click Search.</div>
+          <div class="table-wrap"><table><thead><tr><th>Date</th><th>Invoice #</th><th>Location</th><th>Truck</th><th>Racking Type</th><th>Part / Item</th><th>Qty</th><th>User</th></tr></thead>
+            <tbody id="invoiceSearchBody"><tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No search run yet.</td></tr></tbody>
+          </table></div>
+          <div id="invoiceSearchLocations"></div>
         </div>
       </section>
 
