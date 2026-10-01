@@ -313,6 +313,9 @@ function onDataChanged() {
   renderInventoryTable();
   renderTruckInventoryTable();
   renderInvoiceTable();
+  populateInvoicePartSuggestions();
+  // Keep an active search current as live invoice data changes.
+  if ((qs("invoiceSearchPart")?.value || "") || (qs("invoiceSearchFrom")?.value || "") || (qs("invoiceSearchTo")?.value || "")) renderInvoiceSearchResults();
   renderRackingReferences();
   refreshAllLineInfo();
   // If line items haven't been initialized yet, do it once parts are loaded
@@ -733,6 +736,103 @@ function invoiceMonthKey(inv) {
     return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
   }
   return "";
+}
+
+function normalizeInvoiceDateForSearch(value) {
+  const raw = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw);
+  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed)) return "";
+  const d = new Date(parsed);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function populateInvoicePartSuggestions() {
+  const list = qs("invoicePartSuggestions");
+  if (!list) return;
+  const names = new Set();
+  state.parts.forEach(p => { if (p.partName) names.add(p.partName); });
+  state.invoices.forEach(inv => getInvoiceLineItems(inv).forEach(line => { if (line.partName) names.add(line.partName); }));
+  list.innerHTML = [...names].sort((a,b) => a.localeCompare(b)).map(name => `<option value="${escapeHtml(name)}"></option>`).join("");
+}
+
+function renderInvoiceSearchResults() {
+  const body = qs("invoiceSearchBody");
+  const summary = qs("invoiceSearchSummary");
+  const locationsBox = qs("invoiceSearchLocations");
+  if (!body || !summary || !locationsBox) return;
+
+  const term = (qs("invoiceSearchPart")?.value || "").trim().toLowerCase();
+  const from = qs("invoiceSearchFrom")?.value || "";
+  const to = qs("invoiceSearchTo")?.value || "";
+
+  if (!term && !from && !to) {
+    body.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">Enter a part name and/or date range, then click Search.</td></tr>`;
+    summary.textContent = "Enter a part name and/or date range, then click Search.";
+    locationsBox.innerHTML = "";
+    return;
+  }
+  if (from && to && from > to) {
+    body.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">The From Date must be before the To Date.</td></tr>`;
+    summary.textContent = "Please correct the date range.";
+    locationsBox.innerHTML = "";
+    return;
+  }
+
+  const matches = [];
+  for (const inv of state.invoices) {
+    const isoDate = normalizeInvoiceDateForSearch(inv.date);
+    if (from && (!isoDate || isoDate < from)) continue;
+    if (to && (!isoDate || isoDate > to)) continue;
+    for (const line of getInvoiceLineItems(inv)) {
+      const haystack = `${line.partName || ""} ${line.rackingType || ""}`.toLowerCase();
+      if (term && !haystack.includes(term)) continue;
+      matches.push({ inv, line, isoDate });
+    }
+  }
+
+  matches.sort((a,b) => (b.isoDate || "").localeCompare(a.isoDate || "") || String(b.inv.invoiceNumber || "").localeCompare(String(a.inv.invoiceNumber || "")));
+  const totalQty = matches.reduce((sum, r) => sum + Number(r.line.quantityUsed || 0), 0);
+  const invoiceCount = new Set(matches.map(r => r.inv.invoiceNumber)).size;
+  const locationTotals = new Map();
+  matches.forEach(r => {
+    const loc = r.inv.location || "Unknown";
+    locationTotals.set(loc, (locationTotals.get(loc) || 0) + Number(r.line.quantityUsed || 0));
+  });
+
+  summary.innerHTML = matches.length
+    ? `<strong>${totalQty.toLocaleString()}</strong> piece${totalQty === 1 ? "" : "s"} found across <strong>${invoiceCount}</strong> invoice${invoiceCount === 1 ? "" : "s"} at <strong>${locationTotals.size}</strong> location${locationTotals.size === 1 ? "" : "s"}.`
+    : `No matching invoice line items were found.`;
+
+  if (!matches.length) {
+    body.innerHTML = `<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No results found for this search.</td></tr>`;
+    locationsBox.innerHTML = "";
+    return;
+  }
+
+  body.innerHTML = matches.map(({inv,line}) => `
+    <tr>
+      <td>${escapeHtml(formatDate(inv.date))}</td>
+      <td><strong>${escapeHtml(inv.invoiceNumber || "—")}</strong></td>
+      <td>${escapeHtml(inv.location || "—")}</td>
+      <td>${escapeHtml(inv.truck || "—")}</td>
+      <td>${escapeHtml(line.rackingType || "—")}</td>
+      <td>${escapeHtml(line.partName || "—")}</td>
+      <td><strong>${Number(line.quantityUsed || 0).toLocaleString()}</strong></td>
+      <td>${escapeHtml(inv.user || "—")}</td>
+    </tr>`).join("");
+
+  const locationRows = [...locationTotals.entries()].sort((a,b) => b[1]-a[1]);
+  locationsBox.innerHTML = `<h3 style="margin-top:18px;">Pieces by Location</h3><div class="search-location-chips">${locationRows.map(([loc,qty]) => `<span class="search-location-chip"><strong>${escapeHtml(loc)}</strong>: ${qty.toLocaleString()}</span>`).join("")}</div>`;
+}
+
+function clearInvoiceSearch() {
+  if (qs("invoiceSearchPart")) qs("invoiceSearchPart").value = "";
+  if (qs("invoiceSearchFrom")) qs("invoiceSearchFrom").value = "";
+  if (qs("invoiceSearchTo")) qs("invoiceSearchTo").value = "";
+  renderInvoiceSearchResults();
 }
 
 function renderInvoiceTable() {
@@ -1670,6 +1770,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   qs("usageForm").addEventListener("submit", useInventory);
   qs("addLineButton").addEventListener("click", () => addLineItem());
   qs("cancelEditButton").addEventListener("click", () => cancelEditInvoice(false));
+  if (qs("invoiceSearchButton")) qs("invoiceSearchButton").addEventListener("click", renderInvoiceSearchResults);
+  if (qs("invoiceSearchClear")) qs("invoiceSearchClear").addEventListener("click", clearInvoiceSearch);
+  if (qs("invoiceSearchPart")) qs("invoiceSearchPart").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); renderInvoiceSearchResults(); } });
 
   // Render initial empty UI
   renderSelects();

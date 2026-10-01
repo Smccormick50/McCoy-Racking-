@@ -121,6 +121,44 @@
       </div>
     </section>
 
+    <section class="panel" id="invoiceSearchPanel">
+      <h2>Search Invoice History</h2>
+      <p class="muted">Search a part to see which invoices used it, how many pieces were invoiced, and where they were used. You can also limit the search to a date range.</p>
+      <div class="invoice-search-grid">
+        <label>
+          Part / Item
+          <input id="invoiceSearchPart" type="search" list="invoicePartSuggestions" placeholder="Type a part name or racking type">
+          <datalist id="invoicePartSuggestions"></datalist>
+        </label>
+        <label>
+          From Date
+          <input id="invoiceSearchFrom" type="date">
+        </label>
+        <label>
+          To Date
+          <input id="invoiceSearchTo" type="date">
+        </label>
+        <div class="invoice-search-actions">
+          <button id="invoiceSearchButton" type="button">Search</button>
+          <button id="invoiceSearchClear" type="button" class="secondary">Clear</button>
+        </div>
+      </div>
+      <div id="invoiceSearchSummary" class="invoice-search-summary muted">Enter a part name and/or date range, then click Search.</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th><th>Invoice #</th><th>Location</th><th>Truck</th><th>Racking Type</th><th>Part / Item</th><th>Qty</th><th>User</th>
+            </tr>
+          </thead>
+          <tbody id="invoiceSearchBody">
+            <tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No search run yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="invoiceSearchLocations"></div>
+    </section>
+
     <section class="panel">
       <h2>This Month's Invoices <span id="invoiceLiveBadge" class="live-badge">Live</span></h2>
       <p class="muted">Only invoices from the current calendar month are shown here. Older invoices are available in <strong>Admin → Archived Invoices</strong>.</p>

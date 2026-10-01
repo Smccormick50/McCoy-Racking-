@@ -964,3 +964,16 @@ input.cell-edit:focus {
     height: 500px;
   }
 }
+
+
+/* ===== Invoice history search ===== */
+.invoice-search-grid { display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:12px; align-items:end; margin:14px 0; }
+.invoice-search-grid label { display:flex; flex-direction:column; gap:6px; font-weight:700; }
+.invoice-search-grid input { width:100%; box-sizing:border-box; }
+.invoice-search-actions { display:flex; gap:8px; }
+.invoice-search-actions button { white-space:nowrap; }
+.invoice-search-summary { margin:12px 0; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; }
+.search-location-chips { display:flex; flex-wrap:wrap; gap:8px; }
+.search-location-chip { display:inline-block; padding:7px 10px; border:1px solid #d6dee8; border-radius:999px; background:#f8fafc; }
+@media (max-width: 850px) { .invoice-search-grid { grid-template-columns:1fr 1fr; } .invoice-search-grid label:first-child { grid-column:1 / -1; } }
+@media (max-width: 560px) { .invoice-search-grid { grid-template-columns:1fr; } .invoice-search-grid label:first-child { grid-column:auto; } .invoice-search-actions { width:100%; } .invoice-search-actions button { flex:1; } }
