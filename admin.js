@@ -96,7 +96,7 @@ function attachAdminListeners() {
     });
     renderPartsTable();
     populateReceivingDropdowns();
-    populateAdminInvoiceSearchRackingTypes();
+    populateSearchFilters();
     updateExportCounts();
     setConnectionStatus("Live", "connected");
   }, err => {
@@ -118,6 +118,7 @@ function attachAdminListeners() {
       .filter(loc => loc.name)
       .sort((a, b) => a.name.localeCompare(b.name));
     renderLocationsList();
+    populateSearchFilters();
   });
 
   db.collection("settings").doc("trucks").onSnapshot(doc => {
@@ -130,6 +131,7 @@ function attachAdminListeners() {
       .sort((a, b) => a.name.localeCompare(b.name));
     renderTrucksList();
     renderAdminTruckInventory();
+    populateSearchFilters();
   });
 
   // Live listener: truck_inventory (for the Truck Inventory admin tab)
@@ -167,8 +169,7 @@ function attachAdminListeners() {
     snap.forEach(d => adminState.invoices.push(d.data()));
     updateExportCounts();
     renderArchivedMonths();
-    populateAdminInvoiceSearchRackingTypes();
-    if ((qs("invoiceSearchRackingType")?.value || "") || (qs("invoiceSearchFrom")?.value || "") || (qs("invoiceSearchTo")?.value || "")) renderAdminInvoiceSearchResults();
+    populateSearchFilters();
   });
 
   db.collection("receipts").orderBy("date", "desc").onSnapshot(snap => {
@@ -1511,97 +1512,6 @@ function downloadArchivedInvoicePdf(invoiceNumber) {
   buildAndDownloadInvoicePdf(invoice);
 }
 
-// ---------- INVOICE SEARCH tab ---------------------------------------------
-
-function normalizeInvoiceDateForSearch(value) {
-  const raw = String(value || "").trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw);
-  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
-  const parsed = Date.parse(raw);
-  if (Number.isNaN(parsed)) return "";
-  const d = new Date(parsed);
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-}
-
-function getAdminInvoiceSearchCatalog() {
-  const catalog = [], seen = new Set();
-  adminState.parts.forEach(part => {
-    const type = String(part.rackingType || "").trim();
-    const name = String(part.name || part.partName || "").trim();
-    if (!type || !name) return;
-    const key = `${type.toLowerCase()}||${name.toLowerCase()}`;
-    if (!seen.has(key)) { seen.add(key); catalog.push({ rackingType:type, name }); }
-  });
-  adminState.invoices.forEach(inv => getInvoiceLineItems(inv).forEach(line => {
-    const type = String(line.rackingType || "").trim();
-    const name = String(line.partName || "").trim();
-    if (!type || !name) return;
-    const key = `${type.toLowerCase()}||${name.toLowerCase()}`;
-    if (!seen.has(key)) { seen.add(key); catalog.push({ rackingType:type, name }); }
-  }));
-  return catalog.sort((a,b) => a.rackingType.localeCompare(b.rackingType) || a.name.localeCompare(b.name));
-}
-
-function populateAdminInvoiceSearchRackingTypes() {
-  const sel = qs("invoiceSearchRackingType");
-  if (!sel) return;
-  const current = sel.value;
-  const types = [...new Set(getAdminInvoiceSearchCatalog().map(p => p.rackingType))].sort((a,b)=>a.localeCompare(b));
-  sel.innerHTML = `<option value="">— Select racking type —</option>` + types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
-  if (current && types.includes(current)) sel.value = current;
-  updateAdminInvoiceSearchPartList();
-}
-
-function updateAdminInvoiceSearchPartList() {
-  const typeSel=qs("invoiceSearchRackingType"), partSel=qs("invoiceSearchPart");
-  if (!typeSel || !partSel) return;
-  const type=typeSel.value, current=partSel.value;
-  if (!type) { partSel.innerHTML=`<option value="">— Select racking type first —</option>`; partSel.disabled=true; return; }
-  const parts=getAdminInvoiceSearchCatalog().filter(p=>p.rackingType===type);
-  partSel.disabled=false;
-  partSel.innerHTML=`<option value="">— All parts in ${escapeHtml(type)} —</option>` + parts.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
-  if (current && parts.some(p=>p.name===current)) partSel.value=current;
-}
-
-function renderAdminInvoiceSearchResults() {
-  const body=qs("invoiceSearchBody"), summary=qs("invoiceSearchSummary"), locationsBox=qs("invoiceSearchLocations");
-  if (!body || !summary || !locationsBox) return;
-  const selectedType=qs("invoiceSearchRackingType")?.value||"", selectedPart=qs("invoiceSearchPart")?.value||"";
-  const from=qs("invoiceSearchFrom")?.value||"", to=qs("invoiceSearchTo")?.value||"";
-  if (!selectedType && !from && !to) { body.innerHTML=`<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">Select a racking type and part, and/or choose a date range, then click Search.</td></tr>`; summary.textContent="Select a racking type and part, and/or choose a date range, then click Search."; locationsBox.innerHTML=""; return; }
-  if (from && to && from>to) { body.innerHTML=`<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">The From Date must be before the To Date.</td></tr>`; summary.textContent="Please correct the date range."; locationsBox.innerHTML=""; return; }
-  const matches=[];
-  adminState.invoices.forEach(inv => {
-    const isoDate=normalizeInvoiceDateForSearch(inv.date);
-    if (from && (!isoDate || isoDate<from)) return;
-    if (to && (!isoDate || isoDate>to)) return;
-    getInvoiceLineItems(inv).forEach(line => {
-      if (selectedType && String(line.rackingType||"")!==selectedType) return;
-      if (selectedPart && String(line.partName||"")!==selectedPart) return;
-      matches.push({inv,line,isoDate});
-    });
-  });
-  matches.sort((a,b)=>(b.isoDate||"").localeCompare(a.isoDate||"") || String(b.inv.invoiceNumber||"").localeCompare(String(a.inv.invoiceNumber||"")));
-  const totalQty=matches.reduce((n,r)=>n+Number(r.line.quantityUsed||0),0);
-  const invoiceCount=new Set(matches.map(r=>r.inv.invoiceNumber)).size;
-  const locationTotals=new Map();
-  matches.forEach(r=>{ const loc=r.inv.location||"Unknown"; locationTotals.set(loc,(locationTotals.get(loc)||0)+Number(r.line.quantityUsed||0)); });
-  summary.innerHTML=matches.length ? `<strong>${totalQty.toLocaleString()}</strong> piece${totalQty===1?"":"s"} found across <strong>${invoiceCount}</strong> invoice${invoiceCount===1?"":"s"} at <strong>${locationTotals.size}</strong> location${locationTotals.size===1?"":"s"}.` : "No matching invoice line items were found.";
-  if (!matches.length) { body.innerHTML=`<tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No results found for this search.</td></tr>`; locationsBox.innerHTML=""; return; }
-  body.innerHTML=matches.map(({inv,line})=>`<tr><td>${escapeHtml(formatDate(inv.date))}</td><td><strong>${escapeHtml(inv.invoiceNumber||"—")}</strong></td><td>${escapeHtml(inv.location||"—")}</td><td>${escapeHtml(inv.truck||"—")}</td><td>${escapeHtml(line.rackingType||"—")}</td><td>${escapeHtml(line.partName||"—")}</td><td><strong>${Number(line.quantityUsed||0).toLocaleString()}</strong></td><td>${escapeHtml(inv.user||inv.createdBy||"—")}</td></tr>`).join("");
-  const rows=[...locationTotals.entries()].sort((a,b)=>b[1]-a[1]);
-  locationsBox.innerHTML=`<h3 style="margin-top:18px;">Pieces by Location</h3><div class="search-location-chips">${rows.map(([loc,qty])=>`<span class="search-location-chip"><strong>${escapeHtml(loc)}</strong>: ${qty.toLocaleString()}</span>`).join("")}</div>`;
-}
-
-function clearAdminInvoiceSearch() {
-  if (qs("invoiceSearchRackingType")) qs("invoiceSearchRackingType").value="";
-  if (qs("invoiceSearchPart")) { qs("invoiceSearchPart").innerHTML=`<option value="">— Select racking type first —</option>`; qs("invoiceSearchPart").disabled=true; }
-  if (qs("invoiceSearchFrom")) qs("invoiceSearchFrom").value="";
-  if (qs("invoiceSearchTo")) qs("invoiceSearchTo").value="";
-  renderAdminInvoiceSearchResults();
-}
-
 // ---- Helper functions for PDF generation (copied from app.js) ----
 
 function formatDate(stored) {
@@ -2554,6 +2464,326 @@ function populateReceivingDropdowns() {
   renderReceiptLineItems();
 }
 
+// ---------- INVOICE SEARCH tab ---------------------------------------------
+
+let searchResults = []; // most recent flattened results (one row per line item)
+
+function populateSearchFilters() {
+  // Racking Types
+  const types = [...new Set(adminState.parts.map(p => p.rackingType).filter(Boolean))].sort();
+  const rt = qs("searchRackingType");
+  if (rt) {
+    const prev = rt.value;
+    rt.innerHTML = `<option value="">All racking types</option>` +
+      types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+    rt.value = prev;
+  }
+
+  // Parts (filtered by racking type if selected)
+  populateSearchPartDropdown();
+
+  // Stores
+  const st = qs("searchStore");
+  if (st) {
+    const prev = st.value;
+    st.innerHTML = `<option value="">All stores</option>` +
+      adminState.locations.map(l => `<option value="${escapeHtml(l.name)}">${escapeHtml(l.name)}</option>`).join("");
+    st.value = prev;
+  }
+
+  // Trucks
+  const tr = qs("searchTruck");
+  if (tr) {
+    const prev = tr.value;
+    tr.innerHTML = `<option value="">All trucks</option>` +
+      adminState.trucks.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("");
+    tr.value = prev;
+  }
+
+  // Users (unique names seen on invoices)
+  const users = [...new Set(adminState.invoices.map(inv => inv.user).filter(Boolean))].sort();
+  const u = qs("searchUser");
+  if (u) {
+    const prev = u.value;
+    u.innerHTML = `<option value="">All users</option>` +
+      users.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+    u.value = prev;
+  }
+}
+
+function populateSearchPartDropdown() {
+  const rt = qs("searchRackingType");
+  const partSel = qs("searchPart");
+  if (!partSel) return;
+  const type = rt ? rt.value : "";
+  const prev = partSel.value;
+  const parts = adminState.parts
+    .filter(p => !type || p.rackingType === type)
+    .slice()
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  partSel.innerHTML = `<option value="">All parts</option>` +
+    parts.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
+  partSel.value = prev;
+}
+
+function invoiceDateIso(inv) {
+  const d = inv && inv.date ? String(inv.date) : "";
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (iso) return d;
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(d);
+  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}`;
+  return "";
+}
+
+function runInvoiceSearch() {
+  const filters = {
+    rackingType: qs("searchRackingType").value,
+    partId: qs("searchPart").value,
+    store: qs("searchStore").value,
+    truck: qs("searchTruck").value,
+    wo: qs("searchWO").value.trim().toLowerCase(),
+    po: qs("searchPO").value.trim().toLowerCase(),
+    user: qs("searchUser").value,
+    from: qs("searchFrom").value,
+    to: qs("searchTo").value
+  };
+
+  const rows = [];
+  for (const inv of adminState.invoices) {
+    // Invoice-level filters
+    if (filters.store && inv.location !== filters.store) continue;
+    if (filters.truck && inv.truck !== filters.truck) continue;
+    if (filters.user && inv.user !== filters.user) continue;
+    if (filters.wo && !(inv.workOrderNumber || "").toLowerCase().includes(filters.wo)) continue;
+    if (filters.po && !(inv.poNumber || "").toLowerCase().includes(filters.po)) continue;
+    const iso = invoiceDateIso(inv);
+    if (filters.from && iso && iso < filters.from) continue;
+    if (filters.to && iso && iso > filters.to) continue;
+
+    const lines = Array.isArray(inv.lineItems) ? inv.lineItems : [];
+    for (const li of lines) {
+      if (filters.rackingType && li.rackingType !== filters.rackingType) continue;
+      if (filters.partId && li.partId !== filters.partId) continue;
+      rows.push({
+        invoiceNumber: inv.invoiceNumber || "",
+        date: iso || inv.date || "",
+        location: inv.location || "",
+        truck: inv.truck || "",
+        rackingType: li.rackingType || "",
+        partName: li.partName || "",
+        qty: Number(li.quantityUsed || 0),
+        wo: inv.workOrderNumber || "",
+        po: inv.poNumber || "",
+        user: inv.user || "",
+        isVoid: !!inv.isVoid,
+        isDamage: !!inv.isDamageWriteOff,
+        lineTotal: Number(li.total || 0),
+        _invoice: inv
+      });
+    }
+  }
+
+  // Sort newest first
+  rows.sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.invoiceNumber).localeCompare(String(a.invoiceNumber)));
+
+  searchResults = rows;
+  renderSearchResults();
+}
+
+function renderSearchResults() {
+  const body = qs("searchResultsBody");
+  if (!body) return;
+
+  // Totals
+  const uniqueInvoices = new Set();
+  let pieces = 0, value = 0;
+  for (const r of searchResults) {
+    if (r.isVoid) continue;
+    uniqueInvoices.add(r.invoiceNumber);
+    pieces += r.qty;
+    value += r.lineTotal;
+  }
+  qs("searchTotalInvoices").textContent = uniqueInvoices.size;
+  qs("searchTotalPieces").textContent = pieces;
+  qs("searchTotalValue").textContent = money(value);
+  qs("searchTotalRows").textContent = searchResults.length;
+
+  if (!searchResults.length) {
+    body.innerHTML = `<tr><td colspan="12" class="muted" style="text-align:center;padding:20px;">No results. Set filters above and click Search.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = searchResults.map((r, i) => `
+    <tr>
+      <td>${escapeHtml(r.date)}</td>
+      <td><strong>${escapeHtml(r.invoiceNumber)}</strong>${r.isDamage ? `<br><span class="damage-badge">DAMAGE</span>` : ""}</td>
+      <td>${escapeHtml(r.location || "—")}</td>
+      <td>${escapeHtml(r.truck || "—")}</td>
+      <td>${escapeHtml(r.rackingType || "")}</td>
+      <td>${escapeHtml(r.partName || "")}</td>
+      <td>${r.qty}</td>
+      <td>${escapeHtml(r.wo || "—")}</td>
+      <td>${escapeHtml(r.po || "—")}</td>
+      <td>${escapeHtml(r.user || "—")}</td>
+      <td><span class="${r.isVoid ? "status-void" : "status-active"}">${r.isVoid ? "VOID" : "ACTIVE"}</span></td>
+      <td>${r.isVoid ? "" : `<button type="button" class="danger" data-search-void="${escapeHtml(r.invoiceNumber)}">Void</button>`}</td>
+    </tr>
+  `).join("");
+
+  body.querySelectorAll("button[data-search-void]").forEach(btn => {
+    btn.addEventListener("click", () => voidInvoiceFromSearch(btn.dataset.searchVoid));
+  });
+}
+
+async function voidInvoiceFromSearch(invNum) {
+  if (!requireAdminUser()) return;
+  if (!confirm(`Void invoice ${invNum}?\n\nThis marks the invoice as void (keeps the record but excludes it from totals). It does NOT return inventory. Use Recovery if you need to undo and restore stock.`)) return;
+  const user = getAdminUser();
+  try {
+    await db.collection("invoices").doc(invNum).update({
+      isVoid: true,
+      voidedBy: user,
+      voidedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await recordAudit("VOID_INVOICE", invNum, { invoiceNumber: invNum });
+    showAdminMessage(`Voided ${invNum}.`, false);
+    runInvoiceSearch(); // refresh results
+  } catch (err) {
+    console.error("Void failed:", err);
+    showAdminMessage("Void failed: " + err.message, true);
+  }
+}
+
+function clearInvoiceSearch() {
+  ["searchRackingType", "searchPart", "searchStore", "searchTruck", "searchUser"].forEach(id => {
+    const el = qs(id);
+    if (el) el.value = "";
+  });
+  ["searchWO", "searchPO", "searchFrom", "searchTo"].forEach(id => {
+    const el = qs(id);
+    if (el) el.value = "";
+  });
+  populateSearchPartDropdown();
+  searchResults = [];
+  renderSearchResults();
+}
+
+function exportSearchToExcel() {
+  if (typeof XLSX === "undefined") {
+    showAdminMessage("Excel library didn't load. Check your connection and try again.", true);
+    return;
+  }
+  if (!searchResults.length) {
+    showAdminMessage("No results to export. Run a search first.", true);
+    return;
+  }
+  const rows = searchResults.map(r => ({
+    "Date": r.date,
+    "Invoice #": r.invoiceNumber,
+    "Store": r.location,
+    "Truck": r.truck,
+    "Racking Type": r.rackingType,
+    "Item / Part": r.partName,
+    "Qty": r.qty,
+    "Work Order": r.wo,
+    "PO #": r.po,
+    "User": r.user,
+    "Status": r.isVoid ? "VOID" : "ACTIVE",
+    "Line Total": r.lineTotal
+  }));
+  // Totals row
+  const activeRows = searchResults.filter(r => !r.isVoid);
+  rows.push({});
+  rows.push({
+    "Date": "TOTAL (active rows)",
+    "Qty": activeRows.reduce((s, r) => s + r.qty, 0),
+    "Line Total": activeRows.reduce((s, r) => s + r.lineTotal, 0)
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws["!cols"] = [
+    { wch: 12 }, { wch: 12 }, { wch: 22 }, { wch: 14 },
+    { wch: 18 }, { wch: 50 }, { wch: 8 }, { wch: 14 },
+    { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 12 }
+  ];
+  if (typeof formatColumnAsCurrency === "function") {
+    formatColumnAsCurrency(ws, rows.length, "L");
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Invoice Search");
+  const filename = `mc-racking-invoice-search-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  showAdminMessage(`Downloaded: ${filename}`, false);
+}
+
+function exportSearchToPdf() {
+  if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+    showAdminMessage("PDF library didn't load. Check your connection and try again.", true);
+    return;
+  }
+  if (!searchResults.length) {
+    showAdminMessage("No results to export. Run a search first.", true);
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape" });
+  if (typeof doc.autoTable !== "function") {
+    showAdminMessage("PDF table library didn't load.", true);
+    return;
+  }
+  const GREEN_DARK = [15, 58, 42];
+  const YELLOW = [245, 209, 22];
+  const PAGE_W = doc.internal.pageSize.getWidth();
+
+  // Header band
+  doc.setFillColor(...GREEN_DARK);
+  doc.rect(0, 0, PAGE_W, 24, "F");
+  doc.setFillColor(...YELLOW);
+  doc.rect(0, 24, PAGE_W, 2, "F");
+  doc.setTextColor(...YELLOW);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text("Mc Racking — Invoice Search Report", 14, 15);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(new Date().toLocaleString(), PAGE_W - 14, 15, { align: "right" });
+
+  // Summary totals
+  const uniqueInvoices = new Set();
+  let pieces = 0, value = 0;
+  for (const r of searchResults) {
+    if (r.isVoid) continue;
+    uniqueInvoices.add(r.invoiceNumber);
+    pieces += r.qty;
+    value += r.lineTotal;
+  }
+  doc.setTextColor(...GREEN_DARK);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  const summary = `Invoices: ${uniqueInvoices.size}    Pieces: ${pieces}    Value: ${money(value)}    Rows: ${searchResults.length}`;
+  doc.text(summary, 14, 34);
+
+  doc.autoTable({
+    startY: 40,
+    head: [["Date", "Invoice", "Store", "Truck", "Racking Type", "Part", "Qty", "WO", "PO", "User", "Status"]],
+    body: searchResults.map(r => [
+      r.date, r.invoiceNumber, r.location, r.truck, r.rackingType,
+      r.partName, r.qty, r.wo, r.po, r.user, r.isVoid ? "VOID" : "ACTIVE"
+    ]),
+    headStyles: { fillColor: GREEN_DARK, textColor: YELLOW, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    styles: { fontSize: 8, cellPadding: 2 },
+    margin: { left: 10, right: 10 }
+  });
+
+  doc.setTextColor(120, 120, 120);
+  doc.setFontSize(7);
+  doc.text("Mc Racking — McCoy Corporation Headquarters — 1350 N I.H. 35, San Marcos, TX 78666",
+    PAGE_W / 2, doc.internal.pageSize.getHeight() - 6, { align: "center" });
+
+  doc.save(`mc-racking-invoice-search-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
 // ---------- Tab switching --------------------------------------------------
 
 function setupTabs() {
@@ -2592,10 +2822,6 @@ async function startAdmin() {
 
   setupTabs();
 
-  if (qs("invoiceSearchButton")) qs("invoiceSearchButton").addEventListener("click", renderAdminInvoiceSearchResults);
-  if (qs("invoiceSearchClear")) qs("invoiceSearchClear").addEventListener("click", clearAdminInvoiceSearch);
-  if (qs("invoiceSearchRackingType")) qs("invoiceSearchRackingType").addEventListener("change", updateAdminInvoiceSearchPartList);
-
   qs("addPartForm").addEventListener("submit", addNewPart);
   qs("addUserForm").addEventListener("submit", addUser);
   qs("addLocationForm").addEventListener("submit", addLocation);
@@ -2622,6 +2848,18 @@ async function startAdmin() {
     const addBtn = qs("addReceiptLineBtn");
     if (addBtn) addBtn.addEventListener("click", addReceiptLineItem);
   }
+
+  // Invoice Search wiring
+  const searchRunBtn = qs("searchRunBtn");
+  if (searchRunBtn) searchRunBtn.addEventListener("click", runInvoiceSearch);
+  const searchClearBtn = qs("searchClearBtn");
+  if (searchClearBtn) searchClearBtn.addEventListener("click", clearInvoiceSearch);
+  const searchXlsx = qs("searchExportXlsx");
+  if (searchXlsx) searchXlsx.addEventListener("click", exportSearchToExcel);
+  const searchPdf = qs("searchExportPdf");
+  if (searchPdf) searchPdf.addEventListener("click", exportSearchToPdf);
+  const searchRt = qs("searchRackingType");
+  if (searchRt) searchRt.addEventListener("change", populateSearchPartDropdown);
 
   attachAdminListeners();
 }

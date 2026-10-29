@@ -44,8 +44,8 @@
       <button type="button" class="tab-btn" data-tab="receiving">Receiving</button>
         <button type="button" class="tab-btn" data-tab="recovery">Recovery</button>
         <button type="button" class="tab-btn" data-tab="export">Export</button>
-        <button type="button" class="tab-btn" data-tab="invoiceSearch">Invoice Search</button>
         <button type="button" class="tab-btn" data-tab="archived">Archived Invoices</button>
+        <button type="button" class="tab-btn" data-tab="search">Invoice Search</button>
         <button type="button" class="tab-btn" data-tab="audit">Audit Log</button>
       </nav>
 
@@ -318,39 +318,106 @@
         </div>
       </section>
 
-      <!-- INVOICE SEARCH tab -->
-      <section id="tab-invoiceSearch" class="tab-panel">
-        <div class="panel" id="invoiceSearchPanel">
-          <h2>Search Invoice History <span class="live-badge">Live</span></h2>
-          <p class="muted">First select the racking type, then select the part. The search shows where the part was invoiced and how many pieces were used. You can also limit the results to a date range.</p>
-          <div class="invoice-search-grid">
-            <label>Racking Type
-              <select id="invoiceSearchRackingType"><option value="">— Select racking type —</option></select>
-            </label>
-            <label>Part / Item
-              <select id="invoiceSearchPart" disabled><option value="">— Select racking type first —</option></select>
-            </label>
-            <label>From Date <input id="invoiceSearchFrom" type="date"></label>
-            <label>To Date <input id="invoiceSearchTo" type="date"></label>
-            <div class="invoice-search-actions">
-              <button id="invoiceSearchButton" type="button">Search</button>
-              <button id="invoiceSearchClear" type="button" class="secondary">Clear</button>
-            </div>
-          </div>
-          <div id="invoiceSearchSummary" class="invoice-search-summary muted">Select a racking type and part, and/or choose a date range, then click Search.</div>
-          <div class="table-wrap"><table><thead><tr><th>Date</th><th>Invoice #</th><th>Location</th><th>Truck</th><th>Racking Type</th><th>Part / Item</th><th>Qty</th><th>User</th></tr></thead>
-            <tbody id="invoiceSearchBody"><tr><td colspan="8" class="muted" style="text-align:center;padding:20px;">No search run yet.</td></tr></tbody>
-          </table></div>
-          <div id="invoiceSearchLocations"></div>
-        </div>
-      </section>
-
       <!-- ARCHIVED INVOICES tab -->
       <section id="tab-archived" class="tab-panel">
         <div class="panel">
           <h2>Archived Invoices <span class="live-badge">Live</span></h2>
           <p class="muted">Invoices from past months, grouped by calendar month. The current month's invoices appear on the main page. Click any month to view its invoices; click <strong>Download .xlsx</strong> to export that month's invoices into a spreadsheet with full line-item detail. Files are generated on demand from live Firestore data, nothing is ever deleted.</p>
           <div id="archivedMonthsContainer"></div>
+        </div>
+      </section>
+
+      <!-- INVOICE SEARCH tab -->
+      <section id="tab-search" class="tab-panel">
+        <div class="panel">
+          <h2>Invoice Search &amp; Reporting</h2>
+          <p class="muted">Filter invoice history by part, store, truck, work order, PO, user, or date range. Export the filtered results.</p>
+          <div class="grid-form">
+            <label>
+              Racking Type
+              <select id="searchRackingType"><option value="">All racking types</option></select>
+            </label>
+            <label>
+              Part
+              <select id="searchPart"><option value="">All parts</option></select>
+            </label>
+            <label>
+              Store
+              <select id="searchStore"><option value="">All stores</option></select>
+            </label>
+            <label>
+              Truck
+              <select id="searchTruck"><option value="">All trucks</option></select>
+            </label>
+            <label>
+              Work Order
+              <input id="searchWO" type="text" placeholder="Work order #">
+            </label>
+            <label>
+              PO #
+              <input id="searchPO" type="text" placeholder="PO #">
+            </label>
+            <label>
+              User
+              <select id="searchUser"><option value="">All users</option></select>
+            </label>
+            <label>
+              From Date
+              <input id="searchFrom" type="date">
+            </label>
+            <label>
+              To Date
+              <input id="searchTo" type="date">
+            </label>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" id="searchRunBtn">Search</button>
+            <button type="button" id="searchClearBtn" class="secondary">Clear</button>
+            <button type="button" id="searchExportXlsx" class="secondary">Export Excel</button>
+            <button type="button" id="searchExportPdf" class="secondary">Export PDF</button>
+          </div>
+
+          <!-- Totals strip -->
+          <div class="search-totals">
+            <div class="search-total-card">
+              <div class="search-total-label">Invoices</div>
+              <div class="search-total-value" id="searchTotalInvoices">0</div>
+            </div>
+            <div class="search-total-card">
+              <div class="search-total-label">Pieces</div>
+              <div class="search-total-value" id="searchTotalPieces">0</div>
+            </div>
+            <div class="search-total-card">
+              <div class="search-total-label">Value</div>
+              <div class="search-total-value" id="searchTotalValue">$0.00</div>
+            </div>
+            <div class="search-total-card">
+              <div class="search-total-label">Rows</div>
+              <div class="search-total-value" id="searchTotalRows">0</div>
+            </div>
+          </div>
+
+          <div class="table-wrap" style="margin-top:12px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Invoice</th>
+                  <th>Store</th>
+                  <th>Truck</th>
+                  <th>Racking Type</th>
+                  <th>Part</th>
+                  <th>Qty</th>
+                  <th>WO</th>
+                  <th>PO</th>
+                  <th>User</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="searchResultsBody"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
