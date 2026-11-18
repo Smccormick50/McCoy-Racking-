@@ -1008,3 +1008,266 @@ input.cell-edit:focus {
   letter-spacing: 0.5px;
   text-decoration: line-through;
 }
+
+/* ===== Damage Estimate tab ===== */
+.estimate-line-row {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.estimate-inv-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 2fr 0.8fr 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+.estimate-custom-grid {
+  display: grid;
+  grid-template-columns: 2.5fr 0.8fr 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+.estimate-line-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+.estimate-line-row label span:first-child {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.estimate-line-row input,
+.estimate-line-row select {
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 14px;
+  background: white;
+}
+.estimate-line-remove {
+  height: 34px;
+  width: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+.estimate-line-total {
+  padding: 6px 8px;
+  background: #e2e8f0;
+  border-radius: 6px;
+  font-weight: 600;
+  text-align: right;
+  min-width: 80px;
+}
+@media (max-width: 720px) {
+  .estimate-inv-grid, .estimate-custom-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Labor cards */
+.estimate-labor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.labor-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.labor-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  margin-top: 8px;
+}
+.labor-card .labor-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #0f3a2a;
+  margin-top: 0;
+}
+.labor-card input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+.labor-card input[type="number"] {
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 14px;
+  background: white;
+}
+@media (max-width: 720px) {
+  .estimate-labor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Totals strip */
+.estimate-totals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 18px;
+}
+.estimate-total-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.estimate-total-card.estimate-grand {
+  background: #0f3a2a;
+  border-color: #0f3a2a;
+}
+.estimate-total-card.estimate-grand .estimate-total-label,
+.estimate-total-card.estimate-grand .estimate-total-value {
+  color: #f5d116;
+}
+.estimate-total-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+.estimate-total-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f3a2a;
+}
+
+/* Quote history cards */
+.quote-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: white;
+}
+.quote-card-header-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+.quote-card-header {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: #0f3a2a;
+  border-right: 1px solid #e2e8f0;
+}
+.quote-card-header:hover {
+  background: #f1f5f9;
+}
+.quote-card-pdf {
+  padding: 0 18px;
+  border-radius: 0;
+  background: #166b46;
+  color: #f5d116;
+  font-weight: bold;
+  border: 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+.quote-card-pdf:hover {
+  background: #0f3a2a;
+}
+.quote-card-body {
+  padding: 14px 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+/* ===== Damage photo thumbnails ===== */
+.estimate-photo-preview {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.photo-thumb {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+.photo-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+}
+.photo-thumb-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 14px;
+  border-radius: 50%;
+  background: rgba(185, 28, 28, 0.9);
+  color: white;
+  border: 0;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.photo-thumb-remove:hover {
+  background: #b91c1c;
+}
+.photo-thumb-size {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 58, 42, 0.8);
+  color: #f5d116;
+  font-size: 10px;
+  padding: 2px 4px;
+  text-align: center;
+}
+
+/* Quote history photo gallery */
+.quote-photo-gallery {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.quote-photo-gallery img {
+  width: 150px;
+  height: 150px;
+  object-fit: cover;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+}
