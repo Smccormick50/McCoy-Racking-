@@ -83,6 +83,7 @@ function configureHeaderForRole() {
   const label = qs("userNameLabel");
   const signedInAs = qs("signedInAs");
   const adminLink = qs("adminLink");
+  const safetyLink = qs("safetyLink");
 
   if (currentUserProfile.isAdmin) {
     // Hide dropdown, show "Signed in as ..."
@@ -91,12 +92,14 @@ function configureHeaderForRole() {
     signedInAs.style.display = "";
     signedInAs.innerHTML = `<span class="muted">Signed in as</span> <strong>${escapeHtml(currentUserProfile.displayName)}</strong>`;
     if (adminLink) adminLink.style.display = "";
+    if (safetyLink) safetyLink.style.display = "";
   } else {
-    // Warehouse: show dropdown, hide admin link
+    // Warehouse: show dropdown, hide admin + safety links
     select.style.display = "";
     label.style.display = "";
     signedInAs.style.display = "none";
     if (adminLink) adminLink.style.display = "none";
+    if (safetyLink) safetyLink.style.display = "none";
   }
 }
 

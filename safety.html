@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>McCoy's Risk and Safety</title>
+
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f3a2a">
+
+  <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <img src="mc-logo.png" alt="McCoy's Risk and Safety" class="brand-logo">
+      <div class="brand-text">
+        <h1>McCoy's Risk and Safety</h1>
+        <p>Damage repair estimates and incident records.</p>
+      </div>
+    </div>
+    <div class="user-field">
+      <div id="signedInAs" class="signed-in-as" style="display:none;"></div>
+      <div class="header-actions">
+        <span id="connectionStatus" class="connection-status">Connecting...</span>
+        <a href="index.html" class="admin-link">← Back to Site</a>
+        <button type="button" class="admin-link" id="signOutBtn">Sign Out</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Tab switcher -->
+    <nav class="admin-tabs">
+      <button type="button" class="tab-btn active" data-tab="estimate">New Estimate</button>
+      <button type="button" class="tab-btn" data-tab="quotes">Quote History</button>
+      <button type="button" class="tab-btn" data-tab="search">Quote Search</button>
+    </nav>
+
+    <!-- Message area -->
+    <div id="adminMessage" class="message"></div>
+
+      <!-- DAMAGE ESTIMATE tab -->
+      <section id="tab-estimate" class="tab-panel active">
+        <div class="panel">
+          <div id="estEditingBanner" class="editing-banner" style="display:none;">
+            <strong>Editing existing quote</strong>
+            <span id="estEditingBannerId" class="muted"></span>
+            <button type="button" id="estEditingCancelBtn" class="secondary">Cancel edit</button>
+          </div>
+          <h2>Risk &amp; Safety — Damaged Racking Estimate</h2>
+          <p class="muted">Build a cost estimate for repairing damaged racking at a store. Uses live part costs from your inventory, plus custom parts and labor crews. Save it to Quote History and download a branded PDF.</p>
+
+          <!-- Header fields -->
+          <div class="grid-form">
+            <label>
+              Estimate Date
+              <input id="estDate" type="date" required>
+            </label>
+            <label>
+              Store / Location
+              <select id="estStore" required></select>
+            </label>
+            <label>
+              Incident # / Reference (optional)
+              <input id="estIncident" type="text" placeholder="e.g. Forklift hit upright 11/18">
+            </label>
+            <label>
+              Caused By (optional)
+              <select id="estCausedBy">
+                <option value="">— Select cause —</option>
+                <option value="McCoy's Forklift">McCoy's Forklift</option>
+                <option value="McCoy's Truck">McCoy's Truck</option>
+                <option value="Vendor Damaged">Vendor Damaged</option>
+                <option value="Customer Damaged">Customer Damaged</option>
+              </select>
+            </label>
+            <label class="wide">
+              Description / Notes (optional)
+              <input id="estNotes" type="text" placeholder="e.g. Row 3, bay 2 — bottom beam bent, upright scraped">
+            </label>
+          </div>
+
+          <!-- Damage photos -->
+          <h3 style="margin-top: 18px; margin-bottom: 8px;">Damage Photos (optional, up to 3)</h3>
+          <p class="muted" style="margin-top:0;font-size:12px;">Photos are automatically shrunk to a reasonable size, saved with the quote, and included on the PDF. Pick 1 to 3 at a time.</p>
+          <input id="estPhotoInput" type="file" accept="image/*" multiple>
+          <div id="estPhotoPreview" class="estimate-photo-preview"></div>
+
+          <!-- Parts from inventory -->
+          <h3 style="margin-top: 18px; margin-bottom: 8px;">Replacement Parts (from inventory)</h3>
+          <div id="estInventoryLines"></div>
+          <button type="button" id="estAddInvLineBtn" class="secondary" style="margin-top: 8px;">+ Add Part From Inventory</button>
+
+          <!-- Custom parts -->
+          <h3 style="margin-top: 18px; margin-bottom: 8px;">Custom / Other Parts (not in inventory)</h3>
+          <div id="estCustomLines"></div>
+          <button type="button" id="estAddCustomLineBtn" class="secondary" style="margin-top: 8px;">+ Add Custom Part</button>
+
+          <!-- Other damage (non-racking) -->
+          <h3 style="margin-top: 18px; margin-bottom: 8px;">Other Damage (Non-Racking)</h3>
+          <p class="muted" style="margin-top:0;font-size:12px;">For damage to a building, sign, fence, bollard, etc. — anything outside racking. Attach the contractor's quote PDF and it will be merged into the estimate PDF.</p>
+          <div class="grid-form">
+            <label class="wide">
+              Description (what was damaged)
+              <input id="estOtherDesc" type="text" placeholder="e.g. Front awning sign bent, needs replacement panel">
+            </label>
+            <label>
+              Contractor Name
+              <input id="estOtherContractor" type="text" placeholder="e.g. Austin Sign Co.">
+            </label>
+            <label>
+              Estimated Cost ($)
+              <input id="estOtherCost" type="number" min="0" step="0.01" placeholder="0.00">
+            </label>
+            <label class="wide">
+              Contractor Quote PDF (optional, max 400 KB)
+              <input id="estOtherPdfInput" type="file" accept="application/pdf">
+              <span id="estOtherPdfStatus" class="muted" style="font-size:11px;font-weight:normal;margin-top:2px;"></span>
+            </label>
+          </div>
+
+          <!-- Labor -->
+          <h3 style="margin-top: 18px; margin-bottom: 8px;">Labor</h3>
+          <div class="estimate-labor-grid">
+            <div class="labor-card">
+              <label class="labor-check">
+                <input type="checkbox" id="estLaborGreen">
+                <span><strong>Green Team</strong> — <span id="estLaborGreenRate">$201.00</span>/hr</span>
+              </label>
+              <label>
+                Hours
+                <input id="estLaborGreenHours" type="number" min="0" step="0.25" value="0" disabled>
+              </label>
+            </div>
+            <div class="labor-card">
+              <label class="labor-check">
+                <input type="checkbox" id="estLaborSilver">
+                <span><strong>Silver Team</strong> — <span id="estLaborSilverRate">$134.00</span>/hr</span>
+              </label>
+              <label>
+                Hours
+                <input id="estLaborSilverHours" type="number" min="0" step="0.25" value="0" disabled>
+              </label>
+            </div>
+          </div>
+          <p class="muted" style="font-size:12px;margin-top:6px;">Rates are editable per quote. To change the saved defaults, edit <code>settings/labor_rates</code> in Firestore (fields: <code>greenTeamRate</code>, <code>silverTeamRate</code>).</p>
+
+          <!-- Totals + actions -->
+          <div class="estimate-totals estimate-totals-4">
+            <div class="estimate-total-card"><div class="estimate-total-label">Parts</div><div class="estimate-total-value" id="estTotalParts">$0.00</div></div>
+            <div class="estimate-total-card"><div class="estimate-total-label">Labor</div><div class="estimate-total-value" id="estTotalLabor">$0.00</div></div>
+            <div class="estimate-total-card"><div class="estimate-total-label">Other Damage</div><div class="estimate-total-value" id="estTotalOther">$0.00</div></div>
+            <div class="estimate-total-card estimate-grand"><div class="estimate-total-label">Grand Total</div><div class="estimate-total-value" id="estTotalGrand">$0.00</div></div>
+          </div>
+
+          <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
+            <button type="button" id="estSaveAndDownloadBtn">Save Quote &amp; Download PDF</button>
+            <button type="button" id="estDownloadOnlyBtn" class="secondary">Download PDF (don't save)</button>
+            <button type="button" id="estClearBtn" class="secondary">Clear Form</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- QUOTE HISTORY tab -->
+      <section id="tab-quotes" class="tab-panel">
+        <div class="panel">
+          <h2>Quote History <span class="live-badge">Live</span></h2>
+          <p class="muted">Every saved damage estimate. Click any quote to see its details and re-download the PDF.</p>
+          <div id="quoteHistoryContainer"></div>
+        </div>
+      </section>
+
+      <!-- QUOTE SEARCH tab -->
+      <section id="tab-search" class="tab-panel">
+        <div class="panel">
+          <h2>Quote Search &amp; Reporting</h2>
+          <p class="muted">Filter the damage quote history by store, cause, date range, or keyword. Export the filtered results.</p>
+          <div class="grid-form">
+            <label>
+              Store
+              <select id="qsStore"><option value="">All stores</option></select>
+            </label>
+            <label>
+              Caused By
+              <select id="qsCausedBy">
+                <option value="">All causes</option>
+                <option value="McCoy's Forklift">McCoy's Forklift</option>
+                <option value="McCoy's Truck">McCoy's Truck</option>
+                <option value="Vendor Damaged">Vendor Damaged</option>
+                <option value="Customer Damaged">Customer Damaged</option>
+              </select>
+            </label>
+            <label>
+              Racking Type Damaged
+              <select id="qsRackingType"><option value="">All racking types</option></select>
+            </label>
+            <label>
+              Prepared By
+              <select id="qsUser"><option value="">All users</option></select>
+            </label>
+            <label>
+              From Date
+              <input id="qsFrom" type="date">
+            </label>
+            <label>
+              To Date
+              <input id="qsTo" type="date">
+            </label>
+            <label>
+              Minimum Grand Total ($)
+              <input id="qsMinTotal" type="number" min="0" step="0.01" placeholder="e.g. 5000">
+            </label>
+            <label class="wide">
+              Keyword (searches description, notes, incident, contractor)
+              <input id="qsKeyword" type="text" placeholder="e.g. awning, forklift, Austin Sign">
+            </label>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" id="qsRunBtn">Search</button>
+            <button type="button" id="qsClearBtn" class="secondary">Clear</button>
+            <button type="button" id="qsExportXlsx" class="secondary">Export Excel</button>
+            <button type="button" id="qsExportPdf" class="secondary">Export PDF</button>
+          </div>
+
+          <!-- Totals strip -->
+          <div class="search-totals">
+            <div class="search-total-card">
+              <div class="search-total-label">Quotes</div>
+              <div class="search-total-value" id="qsTotalQuotes">0</div>
+            </div>
+            <div class="search-total-card">
+              <div class="search-total-label">Parts Value</div>
+              <div class="search-total-value" id="qsTotalParts">$0.00</div>
+            </div>
+            <div class="search-total-card">
+              <div class="search-total-label">Labor Value</div>
+              <div class="search-total-value" id="qsTotalLabor">$0.00</div>
+            </div>
+            <div class="search-total-card">
+              <div class="search-total-label">Grand Total</div>
+              <div class="search-total-value" id="qsTotalGrand">$0.00</div>
+            </div>
+          </div>
+
+          <!-- Breakdown panels -->
+          <div class="breakdown-grid">
+            <div class="breakdown-panel">
+              <h4>Damage by Racking Type</h4>
+              <p class="muted" style="margin-top:0;font-size:12px;">Which racking types are getting damaged, by piece count and dollar value.</p>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Racking Type</th>
+                      <th style="text-align:right;">Pieces</th>
+                      <th style="text-align:right;">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody id="qsRackingBreakdown"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="breakdown-panel">
+              <h4>Damage by Cause</h4>
+              <p class="muted" style="margin-top:0;font-size:12px;">How many quotes for each cause and their total value.</p>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Caused By</th>
+                      <th style="text-align:right;">Quotes</th>
+                      <th style="text-align:right;">Grand Total</th>
+                    </tr>
+                  </thead>
+                  <tbody id="qsCauseBreakdown"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-wrap" style="margin-top:12px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Store</th>
+                  <th>Incident</th>
+                  <th>Caused By</th>
+                  <th>Parts</th>
+                  <th>Labor</th>
+                  <th>Other</th>
+                  <th>Grand Total</th>
+                  <th>Prepared By</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="qsResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+  </main>
+
+  <footer>
+    <p>McCoy's Risk and Safety · Powered by Firebase · Live across all devices</p>
+  </footer>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+
+  <!-- jsPDF for the branded damage estimate PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- SheetJS for Quote Search Excel export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- pdf-lib for merging contractor PDFs into damage estimates -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+
+  <!-- Config + Risk & Safety app -->
+  <script src="firebase-config.js"></script>
+  <script src="safety.js"></script>
+</body>
+</html>

@@ -46,8 +46,6 @@
         <button type="button" class="tab-btn" data-tab="export">Export</button>
         <button type="button" class="tab-btn" data-tab="archived">Archived Invoices</button>
         <button type="button" class="tab-btn" data-tab="search">Invoice Search</button>
-        <button type="button" class="tab-btn" data-tab="estimate">Damage Estimate</button>
-        <button type="button" class="tab-btn" data-tab="quotes">Quote History</button>
         <button type="button" class="tab-btn" data-tab="audit">Audit Log</button>
       </nav>
 
@@ -423,98 +421,6 @@
         </div>
       </section>
 
-      <!-- DAMAGE ESTIMATE tab -->
-      <section id="tab-estimate" class="tab-panel">
-        <div class="panel">
-          <h2>Risk &amp; Safety — Damaged Racking Estimate</h2>
-          <p class="muted">Build a cost estimate for repairing damaged racking at a store. Uses live part costs from your inventory, plus custom parts and labor crews. Save it to Quote History and download a branded PDF.</p>
-
-          <!-- Header fields -->
-          <div class="grid-form">
-            <label>
-              Estimate Date
-              <input id="estDate" type="date" required>
-            </label>
-            <label>
-              Store / Location
-              <select id="estStore" required></select>
-            </label>
-            <label>
-              Incident # / Reference (optional)
-              <input id="estIncident" type="text" placeholder="e.g. Forklift hit upright 11/18">
-            </label>
-            <label class="wide">
-              Description / Notes (optional)
-              <input id="estNotes" type="text" placeholder="e.g. Row 3, bay 2 — bottom beam bent, upright scraped">
-            </label>
-          </div>
-
-          <!-- Damage photos -->
-          <h3 style="margin-top: 18px; margin-bottom: 8px;">Damage Photos (optional, up to 3)</h3>
-          <p class="muted" style="margin-top:0;font-size:12px;">Photos are automatically shrunk to a reasonable size, saved with the quote, and included on the PDF. Pick 1 to 3 at a time.</p>
-          <input id="estPhotoInput" type="file" accept="image/*" multiple>
-          <div id="estPhotoPreview" class="estimate-photo-preview"></div>
-
-          <!-- Parts from inventory -->
-          <h3 style="margin-top: 18px; margin-bottom: 8px;">Replacement Parts (from inventory)</h3>
-          <div id="estInventoryLines"></div>
-          <button type="button" id="estAddInvLineBtn" class="secondary" style="margin-top: 8px;">+ Add Part From Inventory</button>
-
-          <!-- Custom parts -->
-          <h3 style="margin-top: 18px; margin-bottom: 8px;">Custom / Other Parts (not in inventory)</h3>
-          <div id="estCustomLines"></div>
-          <button type="button" id="estAddCustomLineBtn" class="secondary" style="margin-top: 8px;">+ Add Custom Part</button>
-
-          <!-- Labor -->
-          <h3 style="margin-top: 18px; margin-bottom: 8px;">Labor</h3>
-          <div class="estimate-labor-grid">
-            <div class="labor-card">
-              <label class="labor-check">
-                <input type="checkbox" id="estLaborGreen">
-                <span><strong>Green Team</strong> — <span id="estLaborGreenRate">$201.00</span>/hr</span>
-              </label>
-              <label>
-                Hours
-                <input id="estLaborGreenHours" type="number" min="0" step="0.25" value="0" disabled>
-              </label>
-            </div>
-            <div class="labor-card">
-              <label class="labor-check">
-                <input type="checkbox" id="estLaborSilver">
-                <span><strong>Silver Team</strong> — <span id="estLaborSilverRate">$134.00</span>/hr</span>
-              </label>
-              <label>
-                Hours
-                <input id="estLaborSilverHours" type="number" min="0" step="0.25" value="0" disabled>
-              </label>
-            </div>
-          </div>
-          <p class="muted" style="font-size:12px;margin-top:6px;">Rates are editable per quote. To change the saved defaults, edit <code>settings/labor_rates</code> in Firestore (fields: <code>greenTeamRate</code>, <code>silverTeamRate</code>).</p>
-
-          <!-- Totals + actions -->
-          <div class="estimate-totals">
-            <div class="estimate-total-card"><div class="estimate-total-label">Parts</div><div class="estimate-total-value" id="estTotalParts">$0.00</div></div>
-            <div class="estimate-total-card"><div class="estimate-total-label">Labor</div><div class="estimate-total-value" id="estTotalLabor">$0.00</div></div>
-            <div class="estimate-total-card estimate-grand"><div class="estimate-total-label">Grand Total</div><div class="estimate-total-value" id="estTotalGrand">$0.00</div></div>
-          </div>
-
-          <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
-            <button type="button" id="estSaveAndDownloadBtn">Save Quote &amp; Download PDF</button>
-            <button type="button" id="estDownloadOnlyBtn" class="secondary">Download PDF (don't save)</button>
-            <button type="button" id="estClearBtn" class="secondary">Clear Form</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- QUOTE HISTORY tab -->
-      <section id="tab-quotes" class="tab-panel">
-        <div class="panel">
-          <h2>Quote History <span class="live-badge">Live</span></h2>
-          <p class="muted">Every saved damage estimate. Click any quote to see its details and re-download the PDF.</p>
-          <div id="quoteHistoryContainer"></div>
-        </div>
-      </section>
-
       <!-- AUDIT tab -->
       <section id="tab-audit" class="tab-panel">
         <div class="panel">
@@ -555,6 +461,9 @@
   <!-- jsPDF for PDF download from archived invoices -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- pdf-lib for merging contractor PDFs into damage estimates -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 
   <!-- Config + seed data (used only for first-run seeding) -->
   <script src="firebase-config.js"></script>
