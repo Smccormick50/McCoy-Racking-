@@ -165,7 +165,8 @@ let estEditingQuoteId = null;  // when set, Save overwrites this quote instead o
 let estEditingOriginal = null; // snapshot of the quote being edited (for the audit log)
 let expandedQuotes = new Set();
 
-const MAX_CONTRACTOR_PDF_BYTES = 400 * 1024; // 400 KB — keeps the overall quote doc under Firestore's 1MB limit
+const MAX_CONTRACTOR_PDF_BYTES = 400 * 1024; // Final attachment cap; total Firestore document is checked again at save.
+const TARGET_CONTRACTOR_PDF_BYTES = 300 * 1024; // Best-effort target, not a guarantee.
 
 const MAX_PHOTOS = 3;
 const MAX_PHOTO_WIDTH = 1200;   // px - shrink anything wider
@@ -276,39 +277,100 @@ function renderEstPhotoPreview() {
   });
 }
 
-// Handler for picking a contractor quote PDF for the "Other Damage" section.
-// Reads the file as a base64 data URL, enforces the size cap, stores on estOtherPdf.
-async function handleEstOtherPdfSelect(e) {
-  const file = e.target.files && e.target.files[0];
+// Compress in the browser before storing the contractor PDF in Firestore.
+// First try lossless pdf-lib reserialization. For image-heavy/scanned PDFs,
+// optionally rasterize pages at progressively smaller sizes/qualities.
+// Rasterization preserves appearance but removes selectable text and links.
+function pdfBytesToDataUrl(bytes) {
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return "data:application/pdf;base64," + btoa(binary);
+}
+
+async function optimizeContractorPdf(file) {
+  if (typeof PDFLib === "undefined") throw new Error("PDF optimizer did not load. Check your connection.");
+  const originalBytes = new Uint8Array(await file.arrayBuffer());
+  let best = originalBytes;
+  try {
+    const pdfDocument = await PDFLib.PDFDocument.load(originalBytes);
+    const resaved = new Uint8Array(await pdfDocument.save({ useObjectStreams: true }));
+    if (resaved.length < best.length) best = resaved;
+  } catch (err) {
+    throw new Error("Unable to read this PDF. Password-protected or damaged PDFs cannot be compressed.");
+  }
+  if (best.length > TARGET_CONTRACTOR_PDF_BYTES) {
+    // PDF.js rasterization is a fallback for scanned/image-heavy PDFs only.
+    // Keep original/reserialized file when the rasterized output isn't smaller.
+    if (typeof pdfjsLib !== "undefined") {
+      try {
+        const pdf = await pdfjsLib.getDocument({data: originalBytes.slice()}).promise;
+        if (pdf.numPages > 20) throw new Error("Too many pages to rasterize safely");
+        for (const scale of [1.25, 1.0, 0.8, 0.65]) {
+          for (const quality of [0.7, 0.52, 0.38]) {
+            const output = await PDFLib.PDFDocument.create();
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+              const page = await pdf.getPage(pageNum);
+              const view = page.getViewport({scale});
+              const canvas = document.createElement("canvas");
+              canvas.width = Math.ceil(view.width);
+              canvas.height = Math.ceil(view.height);
+              const ctx = canvas.getContext("2d", {alpha:false});
+              await page.render({canvasContext:ctx,viewport:view}).promise;
+              const jpegUrl = canvas.toDataURL("image/jpeg",quality);
+              const jpegBytes = Uint8Array.from(atob(jpegUrl.split(",")[1]), c=>c.charCodeAt(0));
+              const image = await output.embedJpg(jpegBytes);
+              const newPage = output.addPage([view.width,view.height]);
+              newPage.drawImage(image,{x:0,y:0,width:view.width,height:view.height});
+              canvas.width = canvas.height = 0;
+            }
+            const candidate = new Uint8Array(await output.save({useObjectStreams:true}));
+            if (candidate.length < best.length) best = candidate;
+            if (best.length <= TARGET_CONTRACTOR_PDF_BYTES) break;
+          }
+          if (best.length <= TARGET_CONTRACTOR_PDF_BYTES) break;
+        }
+      } catch (err) {
+        console.warn("Scanned PDF compression unavailable; keeping best lossless version",err);
+      }
+    }
+  }
+  if (best.length > MAX_CONTRACTOR_PDF_BYTES) {
+    throw new Error(`PDF is ${Math.round(file.size/1024)} KB; best compressed size is ${Math.round(best.length/1024)} KB. Maximum is ${Math.round(MAX_CONTRACTOR_PDF_BYTES/1024)} KB. Please reduce the PDF in Acrobat or split it into smaller files.`);
+  }
+  return {
+    name: file.name,
+    dataUrl: pdfBytesToDataUrl(best),
+    sizeKB: Math.round(best.length/1024),
+    originalSizeKB: Math.round(file.size/1024),
+    optimized: best.length < file.size
+  };
+}
+
+async function attachContractorPdf(file) {
   const status = qs("estOtherPdfStatus");
-  if (!file) return;
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
     showAdminMessage("Please pick a PDF file.", true);
-    e.target.value = "";
     return;
   }
-  if (file.size > MAX_CONTRACTOR_PDF_BYTES) {
-    showAdminMessage(`PDF is ${Math.round(file.size/1024)}KB — over the ${Math.round(MAX_CONTRACTOR_PDF_BYTES/1024)}KB limit. Ask the contractor for a smaller PDF (usually "save as reduced size" in Acrobat).`, true);
-    e.target.value = "";
-    return;
-  }
+  if (status) status.textContent = `Optimizing ${file.name} (${Math.round(file.size/1024)} KB)...`;
   try {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
-      fr.onerror = () => reject(new Error("Could not read PDF."));
-      fr.readAsDataURL(file);
-    });
-    estOtherPdf = {
-      name: file.name,
-      dataUrl,
-      sizeKB: Math.round(file.size / 1024)
-    };
-    if (status) status.textContent = `Attached: ${file.name} (${estOtherPdf.sizeKB} KB) — click again to replace, or Clear Form to drop.`;
+    const processed = await optimizeContractorPdf(file);
+    estOtherPdf = processed;
+    if (status) status.textContent = `Attached: ${file.name} — ${processed.originalSizeKB} KB → ${processed.sizeKB} KB${processed.optimized ? " (optimized)" : " (already compact)"}.`;
   } catch (err) {
+    if (status) status.textContent = estOtherPdf ? `Previous attachment retained: ${estOtherPdf.name}` : "No PDF attached";
     showAdminMessage(err.message, true);
-    estOtherPdf = null;
   }
+}
+
+async function handleEstOtherPdfSelect(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  await attachContractorPdf(file);
+  e.target.value = "";
 }
 
 // ---------- Drag & drop ----------
@@ -361,23 +423,7 @@ async function processDroppedFiles(files) {
     if (pdfs.length > 1) {
       showAdminMessage(`Only one contractor PDF per quote. Using "${f.name}" and ignoring the ${pdfs.length - 1} other PDF${pdfs.length - 1 === 1 ? "" : "s"}.`, true);
     }
-    if (f.size > MAX_CONTRACTOR_PDF_BYTES) {
-      showAdminMessage(`PDF is ${Math.round(f.size/1024)}KB — over the ${Math.round(MAX_CONTRACTOR_PDF_BYTES/1024)}KB limit. Ask the contractor for a smaller PDF.`, true);
-    } else {
-      try {
-        const dataUrl = await new Promise((resolve, reject) => {
-          const fr = new FileReader();
-          fr.onload = () => resolve(fr.result);
-          fr.onerror = () => reject(new Error("Could not read PDF."));
-          fr.readAsDataURL(f);
-        });
-        estOtherPdf = { name: f.name, dataUrl, sizeKB: Math.round(f.size / 1024) };
-        const status = qs("estOtherPdfStatus");
-        if (status) status.textContent = `Attached: ${f.name} (${estOtherPdf.sizeKB} KB) — drop another PDF to replace, or Clear Form to drop.`;
-      } catch (err) {
-        showAdminMessage(err.message, true);
-      }
-    }
+    await attachContractorPdf(f);
   }
 
   if (other.length) {
