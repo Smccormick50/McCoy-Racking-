@@ -91,7 +91,7 @@
 
           <!-- Damage photos -->
           <h3 style="margin-top: 18px; margin-bottom: 8px;">Damage Photos (optional, up to 3)</h3>
-          <p class="muted" style="margin-top:0;font-size:12px;">Photos are automatically shrunk to a reasonable size, saved with the quote, and included on the PDF. Pick 1 to 3 at a time.</p>
+          <p class="muted" style="margin-top:0;font-size:12px;">Photos are automatically shrunk to a reasonable size, saved with the quote, and included on the PDF. Pick 1 to 3 at a time, or just <strong>drag &amp; drop</strong> files anywhere on this form &mdash; photos go here, PDFs go to the Contractor Quote slot below.</p>
           <input id="estPhotoInput" type="file" accept="image/*" multiple>
           <div id="estPhotoPreview" class="estimate-photo-preview"></div>
 
@@ -163,7 +163,8 @@
           </div>
 
           <div style="margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;">
-            <button type="button" id="estSaveAndDownloadBtn">Save Quote &amp; Download PDF</button>
+            <button type="button" id="estSaveOnlyBtn">Save</button>
+            <button type="button" id="estSaveAndDownloadBtn">Save &amp; Download PDF</button>
             <button type="button" id="estDownloadOnlyBtn" class="secondary">Download PDF (don't save)</button>
             <button type="button" id="estClearBtn" class="secondary">Clear Form</button>
           </div>

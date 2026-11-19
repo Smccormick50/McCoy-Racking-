@@ -311,6 +311,139 @@ async function handleEstOtherPdfSelect(e) {
   }
 }
 
+// ---------- Drag & drop ----------
+// Smart file routing: images → damage photos, PDF → contractor PDF.
+// Users can drop any mix of files anywhere on the form.
+
+async function processDroppedFiles(files) {
+  const images = [];
+  const pdfs = [];
+  const other = [];
+  for (const f of files) {
+    const name = (f.name || "").toLowerCase();
+    if ((f.type && f.type.startsWith("image/")) || /\.(jpe?g|png|heic|heif|webp|gif)$/.test(name)) {
+      images.push(f);
+    } else if (f.type === "application/pdf" || name.endsWith(".pdf")) {
+      pdfs.push(f);
+    } else {
+      other.push(f);
+    }
+  }
+
+  // Images → damage photos (respects the 3-photo cap)
+  if (images.length) {
+    const slotsLeft = MAX_PHOTOS - estPhotos.length;
+    if (slotsLeft <= 0) {
+      showAdminMessage(`Already at ${MAX_PHOTOS}-photo limit. Remove one first.`, true);
+    } else {
+      const toProcess = images.slice(0, slotsLeft);
+      if (images.length > slotsLeft) {
+        showAdminMessage(`Only adding the first ${slotsLeft} photo${slotsLeft === 1 ? "" : "s"} (max ${MAX_PHOTOS} total).`, true);
+      }
+      for (const f of toProcess) {
+        try {
+          const photo = await processPhotoFile(f);
+          if (photo.sizeKB * 1024 > MAX_PHOTO_BYTES) {
+            showAdminMessage(`"${f.name}" is still ${photo.sizeKB}KB after shrinking — may fail to save. Try a less detailed photo.`, true);
+          }
+          estPhotos.push(photo);
+        } catch (err) {
+          showAdminMessage(err.message, true);
+        }
+      }
+      renderEstPhotoPreview();
+    }
+  }
+
+  // PDF → contractor PDF (only takes the first one)
+  if (pdfs.length) {
+    const f = pdfs[0];
+    if (pdfs.length > 1) {
+      showAdminMessage(`Only one contractor PDF per quote. Using "${f.name}" and ignoring the ${pdfs.length - 1} other PDF${pdfs.length - 1 === 1 ? "" : "s"}.`, true);
+    }
+    if (f.size > MAX_CONTRACTOR_PDF_BYTES) {
+      showAdminMessage(`PDF is ${Math.round(f.size/1024)}KB — over the ${Math.round(MAX_CONTRACTOR_PDF_BYTES/1024)}KB limit. Ask the contractor for a smaller PDF.`, true);
+    } else {
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = () => reject(new Error("Could not read PDF."));
+          fr.readAsDataURL(f);
+        });
+        estOtherPdf = { name: f.name, dataUrl, sizeKB: Math.round(f.size / 1024) };
+        const status = qs("estOtherPdfStatus");
+        if (status) status.textContent = `Attached: ${f.name} (${estOtherPdf.sizeKB} KB) — drop another PDF to replace, or Clear Form to drop.`;
+      } catch (err) {
+        showAdminMessage(err.message, true);
+      }
+    }
+  }
+
+  if (other.length) {
+    showAdminMessage(`Ignored ${other.length} file${other.length === 1 ? "" : "s"} that isn't an image or PDF.`, true);
+  }
+}
+
+// Attach drag-and-drop to the Damage Estimate panel
+function attachEstimateDragDrop() {
+  const panel = document.querySelector("#tab-estimate .panel");
+  if (!panel) return;
+
+  const overlay = document.createElement("div");
+  overlay.className = "dropzone-overlay";
+  overlay.innerHTML = `<div class="dropzone-message">Drop photos and PDFs here<br><span class="muted">Images go to Damage Photos · PDF goes to Contractor Quote</span></div>`;
+  panel.style.position = "relative";
+  panel.appendChild(overlay);
+
+  // Counter-based so entering child elements doesn't flicker the overlay
+  let dragCounter = 0;
+  const showDrop = () => overlay.classList.add("dropzone-active");
+  const hideDrop = () => overlay.classList.remove("dropzone-active");
+
+  panel.addEventListener("dragenter", e => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+      e.preventDefault();
+      dragCounter++;
+      showDrop();
+    }
+  });
+  panel.addEventListener("dragover", e => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+      e.preventDefault();
+    }
+  });
+  panel.addEventListener("dragleave", e => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+      dragCounter = Math.max(0, dragCounter - 1);
+      if (dragCounter === 0) hideDrop();
+    }
+  });
+  panel.addEventListener("drop", async e => {
+    if (!e.dataTransfer || !e.dataTransfer.files) return;
+    e.preventDefault();
+    dragCounter = 0;
+    hideDrop();
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
+    await processDroppedFiles(files);
+  });
+
+  // Also catch drops outside the panel (so dropping on the whole window during
+  // an active drag feels forgiving) — don't trigger if the file never entered the panel
+  window.addEventListener("dragover", e => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+      e.preventDefault();
+    }
+  });
+  window.addEventListener("drop", e => {
+    // Prevent the browser from opening the file as a page if it misses the panel
+    if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+      e.preventDefault();
+    }
+  });
+}
+
 function refreshEstimateLaborRates() {
   const g = qs("estLaborGreenRate");
   const s = qs("estLaborSilverRate");
@@ -572,7 +705,6 @@ function setEstimateEditMode(quoteId, originalQuote) {
   estEditingOriginal = originalQuote || null;
   const banner = qs("estEditingBanner");
   const bannerId = qs("estEditingBannerId");
-  const saveBtn = qs("estSaveAndDownloadBtn");
   if (quoteId) {
     if (banner) banner.style.display = "";
     if (bannerId) {
@@ -581,12 +713,11 @@ function setEstimateEditMode(quoteId, originalQuote) {
         : `#${String(quoteId).substring(0, 12)}`;
       bannerId.textContent = label;
     }
-    if (saveBtn) saveBtn.textContent = "Update Quote & Download PDF";
   } else {
     if (banner) banner.style.display = "none";
     if (bannerId) bannerId.textContent = "";
-    if (saveBtn) saveBtn.textContent = "Save Quote & Download PDF";
   }
+  refreshEstimateButtons();
 }
 
 // Load an existing quote into the form so the admin can edit and re-save it
@@ -715,7 +846,12 @@ function validateEstimate(est) {
   return null;
 }
 
-async function handleEstimateSaveAndDownload() {
+// Save path, shared by both "Save" (no PDF) and "Save & Download".
+// opts.downloadPdf = true  → also build and download the PDF after saving
+// opts.downloadPdf = false → just save, leave the form as-is for more edits
+async function handleEstimateSave(opts) {
+  opts = opts || {};
+  const downloadPdf = opts.downloadPdf !== false; // default true
   if (!requireAdminUser()) return;
   const est = collectEstimate();
   const err = validateEstimate(est);
@@ -723,12 +859,19 @@ async function handleEstimateSaveAndDownload() {
 
   const isEdit = !!estEditingQuoteId;
   const verb = isEdit ? "Update" : "Save";
-  const summary = `${verb} estimate:\n\nStore: ${est.store}\nParts: ${est.items.length} line${est.items.length === 1 ? "" : "s"} = ${money(est.partsTotal)}\nLabor: ${est.laborLines.length} crew${est.laborLines.length === 1 ? "" : "s"} = ${money(est.laborTotal)}\nGrand Total: ${money(est.grandTotal)}\n\n${isEdit ? "Overwrite the existing quote" : "Save to Quote History"} and download PDF?`;
+  const action = downloadPdf ? " and download PDF" : "";
+  const summary = `${verb} estimate:\n\nStore: ${est.store}\nParts: ${est.items.length} line${est.items.length === 1 ? "" : "s"} = ${money(est.partsTotal)}\nLabor: ${est.laborLines.length} crew${est.laborLines.length === 1 ? "" : "s"} = ${money(est.laborTotal)}\nGrand Total: ${money(est.grandTotal)}\n\n${isEdit ? "Overwrite the existing quote" : "Save to Quote History"}${action}?`;
   if (!confirm(summary)) return;
 
-  const btn = qs("estSaveAndDownloadBtn");
-  btn.disabled = true;
-  btn.textContent = isEdit ? "Updating..." : "Saving...";
+  // Disable all save-related buttons during the save
+  const saveBtn = qs("estSaveOnlyBtn");
+  const saveDlBtn = qs("estSaveAndDownloadBtn");
+  if (saveBtn) saveBtn.disabled = true;
+  if (saveDlBtn) {
+    saveDlBtn.disabled = true;
+    saveDlBtn.textContent = isEdit ? "Updating..." : "Saving...";
+  }
+  if (saveBtn) saveBtn.textContent = isEdit ? "Updating..." : "Saving...";
   const user = getAdminUser();
   const now = firebase.firestore.FieldValue.serverTimestamp();
 
@@ -814,20 +957,63 @@ async function handleEstimateSaveAndDownload() {
       }
     );
 
-    // Build and download PDF right away
-    buildAndDownloadEstimatePdf(Object.assign({}, finalPayload, { quoteId }));
+    // Optionally build and download the PDF
+    if (downloadPdf) {
+      buildAndDownloadEstimatePdf(Object.assign({}, finalPayload, { quoteId }));
+    }
+
+    const label = finalPayload.quoteNumber || quoteId.substring(0, 8);
+    const actionDone = downloadPdf ? " PDF downloaded." : "";
     showAdminMessage(isEdit
-      ? `Quote ${finalPayload.quoteNumber || quoteId.substring(0, 8)} updated. PDF downloaded.`
-      : `Quote ${finalPayload.quoteNumber} saved. PDF downloaded.`, false);
-    clearEstimateForm();
+      ? `Quote ${label} updated.${actionDone}`
+      : `Quote ${label} saved.${actionDone}`, false);
+
+    if (isEdit) {
+      // Stay in edit mode after saving — pull in the saved record so follow-up saves
+      // see the up-to-date createdAt/lastEditedAt etc.
+      estEditingOriginal = Object.assign({}, finalPayload);
+      refreshEstimateButtons();
+    } else {
+      // New quote just saved — clear the form so the next quote is fresh
+      clearEstimateForm();
+    }
   } catch (err) {
     console.error("Save quote failed:", err);
     showAdminMessage("Save failed: " + err.message, true);
   } finally {
-    btn.disabled = false;
-    // If still in edit mode (e.g. save failed), restore edit label; otherwise default
-    btn.textContent = estEditingQuoteId ? "Update Quote & Download PDF" : "Save Quote & Download PDF";
+    refreshEstimateButtons();
   }
+}
+
+// Convenience aliases so each button has its own single-purpose handler
+async function handleEstimateSaveOnly() {
+  return handleEstimateSave({ downloadPdf: false });
+}
+async function handleEstimateSaveAndDownload() {
+  return handleEstimateSave({ downloadPdf: true });
+}
+
+// Reset button labels and enabled state based on current edit mode
+function refreshEstimateButtons() {
+  const isEdit = !!estEditingQuoteId;
+  const saveBtn = qs("estSaveOnlyBtn");
+  const saveDlBtn = qs("estSaveAndDownloadBtn");
+  const downloadBtn = qs("estDownloadOnlyBtn");
+  const clearBtn = qs("estClearBtn");
+  if (saveBtn) {
+    saveBtn.disabled = false;
+    saveBtn.textContent = isEdit ? "Update" : "Save";
+  }
+  if (saveDlBtn) {
+    saveDlBtn.disabled = false;
+    saveDlBtn.textContent = isEdit ? "Update & Download PDF" : "Save & Download PDF";
+  }
+  if (downloadBtn) {
+    downloadBtn.disabled = false;
+    downloadBtn.textContent = isEdit ? "Download PDF" : "Download PDF (don't save)";
+  }
+  // Hide Clear Form while editing — it would be ambiguous (abandon edit vs. clear data)
+  if (clearBtn) clearBtn.style.display = isEdit ? "none" : "";
 }
 
 function handleEstimateDownloadOnly() {
@@ -1942,9 +2128,13 @@ async function startSafety() {
 
     qs("estAddInvLineBtn").addEventListener("click", () => { estInvLines.push(newEstInvLine()); renderEstInventoryLines(); updateEstimateTotals(); });
     qs("estAddCustomLineBtn").addEventListener("click", () => { estCustomLines.push(newEstCustomLine()); renderEstCustomLines(); updateEstimateTotals(); });
+    const saveOnlyBtn = qs("estSaveOnlyBtn");
+    if (saveOnlyBtn) saveOnlyBtn.addEventListener("click", handleEstimateSaveOnly);
     qs("estSaveAndDownloadBtn").addEventListener("click", handleEstimateSaveAndDownload);
     qs("estDownloadOnlyBtn").addEventListener("click", handleEstimateDownloadOnly);
     qs("estClearBtn").addEventListener("click", clearEstimateForm);
+    refreshEstimateButtons();
+    attachEstimateDragDrop();
     const cancelEditBtn = qs("estEditingCancelBtn");
     if (cancelEditBtn) cancelEditBtn.addEventListener("click", clearEstimateForm);
 

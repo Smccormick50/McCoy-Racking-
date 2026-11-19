@@ -1419,3 +1419,32 @@ input.cell-edit:focus {
 .quote-card-reopen:hover {
   background: #f1f5f9;
 }
+
+/* Drag & drop overlay for the Damage Estimate form */
+.dropzone-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: rgba(15, 58, 42, 0.90);
+  color: #f5d116;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 100;
+  border: 4px dashed #f5d116;
+}
+.dropzone-overlay.dropzone-active {
+  display: flex;
+}
+.dropzone-message {
+  text-align: center;
+  font-weight: bold;
+  font-size: 22px;
+  line-height: 1.4;
+}
+.dropzone-message .muted {
+  color: #e2e8f0;
+  font-weight: normal;
+  font-size: 14px;
+}
