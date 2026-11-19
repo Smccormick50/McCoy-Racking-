@@ -544,6 +544,7 @@ function collectEstimate() {
     store: qs("estStore").value,
     storeDetails: (adminState.locations.find(l => l.name === qs("estStore").value) || null),
     incident: qs("estIncident").value.trim(),
+    fexaWorkOrder: (qs("estFexaWO") && qs("estFexaWO").value || "").trim(),
     causedBy: qs("estCausedBy") ? qs("estCausedBy").value : "",
     notes: qs("estNotes").value.trim(),
     items: allItems,
@@ -603,6 +604,7 @@ function loadQuoteIntoForm(q) {
   qs("estDate").value = q.date || new Date().toISOString().slice(0, 10);
   qs("estStore").value = q.store || "";
   qs("estIncident").value = q.incident || "";
+  if (qs("estFexaWO")) qs("estFexaWO").value = q.fexaWorkOrder || "";
   if (qs("estCausedBy")) qs("estCausedBy").value = q.causedBy || "";
   qs("estNotes").value = q.notes || "";
 
@@ -683,6 +685,7 @@ function clearEstimateForm() {
   qs("estDate").value = new Date().toISOString().slice(0, 10);
   qs("estStore").value = "";
   qs("estIncident").value = "";
+  if (qs("estFexaWO")) qs("estFexaWO").value = "";
   if (qs("estCausedBy")) qs("estCausedBy").value = "";
   qs("estNotes").value = "";
   if (qs("estOtherDesc")) qs("estOtherDesc").value = "";
@@ -745,6 +748,7 @@ async function handleEstimateSaveAndDownload() {
         ? { name: est.storeDetails.name, phone: est.storeDetails.phone || "", address: est.storeDetails.address || "", city: est.storeDetails.city || "", state: est.storeDetails.state || "", zip: est.storeDetails.zip || "" }
         : { name: est.store, phone: "", address: "", city: "", state: "", zip: "" },
       incident: est.incident,
+      fexaWorkOrder: est.fexaWorkOrder || "",
       causedBy: est.causedBy || "",
       notes: est.notes,
       items: est.items,
@@ -902,6 +906,8 @@ function buildAndDownloadEstimatePdf(quote) {
   metaRow("DATE", formatDate(quote.date) || quote.date || "");
   if (quote.incident) metaRow("INCIDENT", String(quote.incident));
   if (quote.causedBy) metaRow("CAUSED BY", String(quote.causedBy));
+  if (quote.fexaWorkOrder) metaRow("FEXA WO #", String(quote.fexaWorkOrder));
+  if (quote.status === "closed") metaRow("STATUS", "CLOSED");
 
   // Store box (right)
   const boxX = 115, boxY = 50, boxW = 81, boxH = 38;
@@ -1014,7 +1020,41 @@ function buildAndDownloadEstimatePdf(quote) {
   doc.setFontSize(14);
   doc.text("ESTIMATE TOTAL", 18, y + 9);
   doc.text(money(quote.grandTotal), PAGE_W - 18, y + 9, { align: "right" });
-  y += 24;
+  y += 18;
+
+  // Final Actual Cost bar (only shown when the quote is closed and a final cost was recorded)
+  if (quote.status === "closed" && typeof quote.finalCost === "number") {
+    doc.setFillColor(22, 107, 70); // green-mid
+    doc.rect(14, y, PAGE_W - 28, 12, "F");
+    doc.setTextColor(...YELLOW);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text("FINAL ACTUAL COST", 18, y + 8);
+    doc.text(money(quote.finalCost), PAGE_W - 18, y + 8, { align: "right" });
+    y += 16;
+
+    // Delta
+    const delta = Number(quote.finalCost) - Number(quote.grandTotal || 0);
+    const absDelta = Math.abs(delta);
+    const over = delta > 0.001;
+    const under = delta < -0.001;
+    const label = over ? "OVER estimate by" : under ? "UNDER estimate by" : "MATCHED the estimate";
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.rect(14, y, PAGE_W - 28, 10, "FD");
+    doc.setTextColor(over ? 185 : under ? 22 : 15,
+                     over ? 28 : under ? 107 : 58,
+                     over ? 28 : under ? 70 : 42);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text(label, 18, y + 7);
+    if (over || under) {
+      doc.text(money(absDelta), PAGE_W - 18, y + 7, { align: "right" });
+    }
+    y += 16;
+  }
+  y += 6;
 
   // Damage photos (if any). 2 per row, start a new page if we'd run off this one.
   if (quote.photos && quote.photos.length) {
@@ -1150,106 +1190,201 @@ async function mergeAndDownload(jsPdfDoc, contractorDataUrl, filename) {
   }, 100);
 }
 
+// ---------- Close / Re-open quote ------------------------------------------
+
+async function closeQuote(quoteId) {
+  if (!requireAdminUser()) return;
+  const q = adminState.quotes.find(x => x.id === quoteId);
+  if (!q) return;
+  if (q.status === "closed") return;
+
+  const finalCostStr = prompt(
+    `Close quote ${q.quoteNumber || quoteId.substring(0,8)}\n\nEstimate total: ${money(q.grandTotal || 0)}\n\nEnter the FINAL ACTUAL cost (what the work really ended up costing).\nLeave blank or enter 0 if you don't want to record a final cost.`,
+    String(q.grandTotal || 0).replace(/\.00$/, "")
+  );
+  if (finalCostStr === null) return; // user cancelled
+  const finalCost = Number(finalCostStr) || 0;
+  if (finalCost < 0) return showAdminMessage("Final cost must be 0 or greater.", true);
+
+  const user = getAdminUser();
+  const now = firebase.firestore.FieldValue.serverTimestamp();
+  try {
+    await db.collection("quotes").doc(quoteId).set({
+      status: "closed",
+      finalCost,
+      closedBy: user,
+      closedAt: now
+    }, { merge: true });
+    await recordAudit("CLOSE_DAMAGE_ESTIMATE", q.store, {
+      quoteId, quoteNumber: q.quoteNumber || "",
+      estimateTotal: q.grandTotal || 0, finalCost,
+      delta: finalCost - Number(q.grandTotal || 0)
+    });
+    showAdminMessage(`Quote ${q.quoteNumber || quoteId.substring(0,8)} closed.`, false);
+  } catch (err) {
+    console.error("Close failed:", err);
+    showAdminMessage("Close failed: " + err.message, true);
+  }
+}
+
+async function reopenQuote(quoteId) {
+  if (!requireAdminUser()) return;
+  const q = adminState.quotes.find(x => x.id === quoteId);
+  if (!q) return;
+  if (q.status !== "closed") return;
+  if (!confirm(`Re-open quote ${q.quoteNumber || quoteId.substring(0,8)}?\n\nThis clears the closed status and final-cost record, and the quote goes back to the Open list.`)) return;
+  const user = getAdminUser();
+  const now = firebase.firestore.FieldValue.serverTimestamp();
+  try {
+    await db.collection("quotes").doc(quoteId).set({
+      status: "open",
+      reopenedBy: user,
+      reopenedAt: now
+    }, { merge: true });
+    await recordAudit("REOPEN_DAMAGE_ESTIMATE", q.store, { quoteId, quoteNumber: q.quoteNumber || "" });
+    showAdminMessage(`Quote ${q.quoteNumber || quoteId.substring(0,8)} re-opened.`, false);
+  } catch (err) {
+    console.error("Re-open failed:", err);
+    showAdminMessage("Re-open failed: " + err.message, true);
+  }
+}
+
 // ---------- QUOTE HISTORY tab ----------------------------------------------
 
-function renderQuoteHistory() {
-  const container = qs("quoteHistoryContainer");
-  if (!container) return;
-  if (!adminState.quotes.length) {
-    container.innerHTML = `<p class="muted" style="text-align:center;padding:20px;">No quotes saved yet. Create one in the Damage Estimate tab and click "Save Quote & Download PDF".</p>`;
-    return;
-  }
+// Monthly rollup state: current month is flat; older months live inside expandable cards.
+let expandedQuoteMonths = new Set();
+let quotesShowOpenOnly = false;
 
-  const sorted = adminState.quotes.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-  container.innerHTML = sorted.map(q => {
-    const isOpen = expandedQuotes.has(q.id);
-    const arrow = isOpen ? "▼" : "▶";
-    const prefix = q.quoteNumber ? `<span class="quote-num">${escapeHtml(q.quoteNumber)}</span> · ` : "";
-    const header = `${prefix}${escapeHtml(q.date || "")} — ${escapeHtml(q.store || "")}${q.incident ? ` — ${escapeHtml(q.incident)}` : ""}${q.causedBy ? ` <span class="muted">(${escapeHtml(q.causedBy)})</span>` : ""}`;
-    const itemCount = (q.items || []).length;
-    const laborCount = (q.laborLines || []).length;
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
-    let body = "";
-    if (isOpen) {
-      const itemsRows = (q.items || []).map(it => `
-        <tr>
-          <td>${escapeHtml(it.rackingType || (it.source === "custom" ? "(Custom)" : ""))}</td>
-          <td>${escapeHtml(it.description || "")}</td>
-          <td style="text-align:right;">${it.qty}</td>
-          <td style="text-align:right;">${money(it.costEach)}</td>
-          <td style="text-align:right;">${money(it.lineTotal)}</td>
-        </tr>
-      `).join("");
-      const laborRows = (q.laborLines || []).map(l => `
-        <tr>
-          <td>${escapeHtml(l.crew || "")}</td>
-          <td style="text-align:right;">${l.hours}</td>
-          <td style="text-align:right;">${money(l.rate)}/hr</td>
-          <td style="text-align:right;">${money(l.total)}</td>
-        </tr>
-      `).join("");
-      body = `
-        <div class="quote-card-body">
-          ${q.causedBy ? `<p style="margin:0 0 6px;"><strong>Caused By:</strong> ${escapeHtml(q.causedBy)}</p>` : ""}
-          ${q.notes ? `<p style="margin:0 0 10px;"><strong>Notes:</strong> ${escapeHtml(q.notes)}</p>` : ""}
-          ${itemsRows ? `
-            <h4 style="margin:4px 0 6px;">Parts</h4>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Racking Type</th><th>Part</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Cost Each</th><th style="text-align:right;">Line Total</th></tr></thead>
-                <tbody>${itemsRows}</tbody>
-              </table>
-            </div>
-          ` : ""}
-          ${laborRows ? `
-            <h4 style="margin:10px 0 6px;">Labor</h4>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Crew</th><th style="text-align:right;">Hours</th><th style="text-align:right;">Rate</th><th style="text-align:right;">Total</th></tr></thead>
-                <tbody>${laborRows}</tbody>
-              </table>
-            </div>
-          ` : ""}
-          ${q.otherDamage && (q.otherDamage.description || q.otherDamage.cost || q.otherDamage.contractorPdf) ? `
-            <h4 style="margin:10px 0 6px;">Other Damage (Non-Racking)</h4>
-            <p style="margin:0 0 4px;">${escapeHtml(q.otherDamage.description || "—")}</p>
-            ${q.otherDamage.contractorName ? `<p style="margin:0 0 4px;" class="muted">Contractor: ${escapeHtml(q.otherDamage.contractorName)}</p>` : ""}
-            <p style="margin:0 0 4px;">Cost: <strong>${money(q.otherDamage.cost || 0)}</strong></p>
-            ${q.otherDamage.contractorPdf && q.otherDamage.contractorPdf.dataUrl ? `<p style="margin:0 0 4px;"><a href="${q.otherDamage.contractorPdf.dataUrl}" target="_blank" rel="noopener">View contractor PDF (${escapeHtml(q.otherDamage.contractorPdf.name || "")})</a></p>` : ""}
-          ` : ""}
-          ${(q.photos && q.photos.length) ? `
-            <h4 style="margin:10px 0 6px;">Damage Photos (${q.photos.length})</h4>
-            <div class="quote-photo-gallery">
-              ${q.photos.map(p => `<img src="${p.dataUrl}" alt="${escapeHtml(p.name || 'damage photo')}" title="${escapeHtml(p.name || '')} (${p.sizeKB || '?'}KB)" data-full-src="${p.dataUrl}">`).join("")}
-            </div>
-          ` : ""}
-          <p style="margin:12px 0 0;">
-            Parts: <strong>${money(q.partsTotal || 0)}</strong> ·
-            Labor: <strong>${money(q.laborTotal || 0)}</strong> ·
-            Other: <strong>${money(q.otherDamageCost || 0)}</strong> ·
-            <strong style="color:#166b46;">Grand Total: ${money(q.grandTotal || 0)}</strong>
-          </p>
-          <p class="muted" style="margin:8px 0 0;font-size:12px;">Prepared by ${escapeHtml(q.createdBy || "—")}${q.lastEditedBy ? ` · Last edited by ${escapeHtml(q.lastEditedBy)}` : ""}</p>
-        </div>
-      `;
-    }
+function quoteMonthKey(q) {
+  const d = q && q.date ? String(q.date) : "";
+  const iso = /^(\d{4})-(\d{2})-\d{2}$/.exec(d);
+  if (iso) return `${iso[1]}-${iso[2]}`;
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(d);
+  if (us) return `${us[3]}-${String(us[1]).padStart(2, "0")}`;
+  return "";
+}
 
-    return `
-      <div class="quote-card">
-        <div class="quote-card-header-row">
-          <button type="button" class="quote-card-header" data-toggle-quote="${escapeHtml(q.id)}">
-            <span style="font-size:18px;margin-right:8px;">${arrow}</span>
-            <strong style="font-size:15px;">${header}</strong>
-            <span class="muted" style="margin-left:auto;">${itemCount} part${itemCount === 1 ? "" : "s"}, ${laborCount} crew${laborCount === 1 ? "" : "s"} · ${money(q.grandTotal || 0)}</span>
-          </button>
-          <button type="button" class="quote-card-edit" data-quote-edit="${escapeHtml(q.id)}" title="Edit this quote">Edit</button>
-          <button type="button" class="quote-card-pdf" data-quote-pdf="${escapeHtml(q.id)}">PDF</button>
-        </div>
-        ${body}
+function monthLabel(key) {
+  const m = /^(\d{4})-(\d{2})$/.exec(key);
+  if (!m) return key;
+  const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  return `${months[Number(m[2]) - 1]} ${m[1]}`;
+}
+
+// Build the HTML for a single quote card (header + body if expanded).
+function renderQuoteCardHtml(q) {
+  const isOpen = expandedQuotes.has(q.id);
+  const arrow = isOpen ? "▼" : "▶";
+  const prefix = q.quoteNumber ? `<span class="quote-num">${escapeHtml(q.quoteNumber)}</span> · ` : "";
+  const statusBadge = q.status === "closed"
+    ? `<span class="status-closed">CLOSED</span> `
+    : `<span class="status-open">OPEN</span> `;
+  const fexaBadge = q.fexaWorkOrder ? ` <span class="fexa-badge">${escapeHtml(q.fexaWorkOrder)}</span>` : "";
+  const header = `${statusBadge}${prefix}${escapeHtml(q.date || "")} — ${escapeHtml(q.store || "")}${q.incident ? ` — ${escapeHtml(q.incident)}` : ""}${fexaBadge}${q.causedBy ? ` <span class="muted">(${escapeHtml(q.causedBy)})</span>` : ""}`;
+  const itemCount = (q.items || []).length;
+  const laborCount = (q.laborLines || []).length;
+
+  let body = "";
+  if (isOpen) {
+    const itemsRows = (q.items || []).map(it => `
+      <tr>
+        <td>${escapeHtml(it.rackingType || (it.source === "custom" ? "(Custom)" : ""))}</td>
+        <td>${escapeHtml(it.description || "")}</td>
+        <td style="text-align:right;">${it.qty}</td>
+        <td style="text-align:right;">${money(it.costEach)}</td>
+        <td style="text-align:right;">${money(it.lineTotal)}</td>
+      </tr>
+    `).join("");
+    const laborRows = (q.laborLines || []).map(l => `
+      <tr>
+        <td>${escapeHtml(l.crew || "")}</td>
+        <td style="text-align:right;">${l.hours}</td>
+        <td style="text-align:right;">${money(l.rate)}/hr</td>
+        <td style="text-align:right;">${money(l.total)}</td>
+      </tr>
+    `).join("");
+    const finalCostLine = (q.status === "closed" && typeof q.finalCost === "number") ? (() => {
+      const delta = Number(q.finalCost) - Number(q.grandTotal || 0);
+      const deltaLabel = Math.abs(delta) < 0.01
+        ? `matched the estimate`
+        : (delta > 0 ? `<span style="color:#b91c1c;">${money(delta)} over</span>` : `<span style="color:#166b46;">${money(-delta)} under</span>`);
+      return `<p style="margin:4px 0 0;">Final Actual Cost: <strong>${money(q.finalCost)}</strong> · ${deltaLabel}</p>`;
+    })() : "";
+    body = `
+      <div class="quote-card-body">
+        ${q.fexaWorkOrder ? `<p style="margin:0 0 6px;"><strong>FEXA WO #:</strong> ${escapeHtml(q.fexaWorkOrder)}</p>` : ""}
+        ${q.causedBy ? `<p style="margin:0 0 6px;"><strong>Caused By:</strong> ${escapeHtml(q.causedBy)}</p>` : ""}
+        ${q.notes ? `<p style="margin:0 0 10px;"><strong>Notes:</strong> ${escapeHtml(q.notes)}</p>` : ""}
+        ${itemsRows ? `
+          <h4 style="margin:4px 0 6px;">Parts</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Racking Type</th><th>Part</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Cost Each</th><th style="text-align:right;">Line Total</th></tr></thead>
+              <tbody>${itemsRows}</tbody>
+            </table>
+          </div>
+        ` : ""}
+        ${laborRows ? `
+          <h4 style="margin:10px 0 6px;">Labor</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Crew</th><th style="text-align:right;">Hours</th><th style="text-align:right;">Rate</th><th style="text-align:right;">Total</th></tr></thead>
+              <tbody>${laborRows}</tbody>
+            </table>
+          </div>
+        ` : ""}
+        ${q.otherDamage && (q.otherDamage.description || q.otherDamage.cost || q.otherDamage.contractorPdf) ? `
+          <h4 style="margin:10px 0 6px;">Other Damage (Non-Racking)</h4>
+          <p style="margin:0 0 4px;">${escapeHtml(q.otherDamage.description || "—")}</p>
+          ${q.otherDamage.contractorName ? `<p style="margin:0 0 4px;" class="muted">Contractor: ${escapeHtml(q.otherDamage.contractorName)}</p>` : ""}
+          <p style="margin:0 0 4px;">Cost: <strong>${money(q.otherDamage.cost || 0)}</strong></p>
+          ${q.otherDamage.contractorPdf && q.otherDamage.contractorPdf.dataUrl ? `<p style="margin:0 0 4px;"><a href="${q.otherDamage.contractorPdf.dataUrl}" target="_blank" rel="noopener">View contractor PDF (${escapeHtml(q.otherDamage.contractorPdf.name || "")})</a></p>` : ""}
+        ` : ""}
+        ${(q.photos && q.photos.length) ? `
+          <h4 style="margin:10px 0 6px;">Damage Photos (${q.photos.length})</h4>
+          <div class="quote-photo-gallery">
+            ${q.photos.map(p => `<img src="${p.dataUrl}" alt="${escapeHtml(p.name || 'damage photo')}" title="${escapeHtml(p.name || '')} (${p.sizeKB || '?'}KB)" data-full-src="${p.dataUrl}">`).join("")}
+          </div>
+        ` : ""}
+        <p style="margin:12px 0 0;">
+          Parts: <strong>${money(q.partsTotal || 0)}</strong> ·
+          Labor: <strong>${money(q.laborTotal || 0)}</strong> ·
+          Other: <strong>${money(q.otherDamageCost || 0)}</strong> ·
+          <strong style="color:#166b46;">Grand Total: ${money(q.grandTotal || 0)}</strong>
+        </p>
+        ${finalCostLine}
+        <p class="muted" style="margin:8px 0 0;font-size:12px;">Prepared by ${escapeHtml(q.createdBy || "—")}${q.lastEditedBy ? ` · Last edited by ${escapeHtml(q.lastEditedBy)}` : ""}${q.closedBy ? ` · Closed by ${escapeHtml(q.closedBy)}` : ""}</p>
       </div>
     `;
-  }).join("");
+  }
 
+  const closeBtn = q.status === "closed"
+    ? `<button type="button" class="quote-card-reopen" data-quote-reopen="${escapeHtml(q.id)}" title="Re-open">Re-open</button>`
+    : `<button type="button" class="quote-card-close" data-quote-close="${escapeHtml(q.id)}" title="Mark this quote closed">Close</button>`;
+
+  return `
+    <div class="quote-card ${q.status === "closed" ? "quote-card-closed" : ""}">
+      <div class="quote-card-header-row">
+        <button type="button" class="quote-card-header" data-toggle-quote="${escapeHtml(q.id)}">
+          <span style="font-size:18px;margin-right:8px;">${arrow}</span>
+          <span style="font-size:15px;">${header}</span>
+          <span class="muted" style="margin-left:auto;">${itemCount} part${itemCount === 1 ? "" : "s"}, ${laborCount} crew${laborCount === 1 ? "" : "s"} · ${money(q.grandTotal || 0)}</span>
+        </button>
+        ${closeBtn}
+        <button type="button" class="quote-card-edit" data-quote-edit="${escapeHtml(q.id)}" title="Edit this quote">Edit</button>
+        <button type="button" class="quote-card-pdf" data-quote-pdf="${escapeHtml(q.id)}">PDF</button>
+      </div>
+      ${body}
+    </div>
+  `;
+}
+
+function wireQuoteCardButtons(container) {
   container.querySelectorAll("button[data-toggle-quote]").forEach(btn => {
     btn.addEventListener("click", () => {
       const id = btn.dataset.toggleQuote;
@@ -1270,11 +1405,113 @@ function renderQuoteHistory() {
       if (q) loadQuoteIntoForm(q);
     });
   });
+  container.querySelectorAll("button[data-quote-close]").forEach(btn => {
+    btn.addEventListener("click", () => closeQuote(btn.dataset.quoteClose));
+  });
+  container.querySelectorAll("button[data-quote-reopen]").forEach(btn => {
+    btn.addEventListener("click", () => reopenQuote(btn.dataset.quoteReopen));
+  });
   container.querySelectorAll(".quote-photo-gallery img[data-full-src]").forEach(img => {
     img.addEventListener("click", () => window.open(img.dataset.fullSrc, "_blank"));
   });
 }
 
+function renderQuoteHistory() {
+  const container = qs("quoteHistoryContainer");
+  if (!container) return;
+  if (!adminState.quotes.length) {
+    container.innerHTML = `<p class="muted" style="text-align:center;padding:20px;">No quotes saved yet. Create one in the Damage Estimate tab and click "Save Quote & Download PDF".</p>`;
+    return;
+  }
+
+  // Sync toggle state from checkbox if the user clicked it
+  const cb = qs("quotesShowOpen");
+  if (cb) quotesShowOpenOnly = cb.checked;
+
+  const sorted = adminState.quotes.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+
+  // "Show Open Only" view — flat list of every open quote, regardless of month
+  if (quotesShowOpenOnly) {
+    const openQuotes = sorted.filter(q => q.status !== "closed");
+    if (!openQuotes.length) {
+      container.innerHTML = `<p class="muted" style="text-align:center;padding:20px;">No open quotes. Great work! 🎉</p>`;
+      return;
+    }
+    const openTotal = openQuotes.reduce((s, q) => s + Number(q.grandTotal || 0), 0);
+    container.innerHTML = `
+      <p class="muted" style="margin-bottom:10px;"><strong>${openQuotes.length} open quote${openQuotes.length === 1 ? "" : "s"}</strong> · ${money(openTotal)} total</p>
+    ` + openQuotes.map(renderQuoteCardHtml).join("");
+    wireQuoteCardButtons(container);
+    return;
+  }
+
+  // Monthly rollup view — current month flat, older months in collapsible cards
+  const thisMonth = currentMonthKey();
+  const thisMonthQuotes = sorted.filter(q => quoteMonthKey(q) === thisMonth);
+  const olderByMonth = new Map();
+  for (const q of sorted) {
+    const mk = quoteMonthKey(q);
+    if (!mk || mk === thisMonth) continue;
+    if (!olderByMonth.has(mk)) olderByMonth.set(mk, []);
+    olderByMonth.get(mk).push(q);
+  }
+
+  let html = "";
+
+  // Current month section
+  if (thisMonthQuotes.length) {
+    const openCount = thisMonthQuotes.filter(q => q.status !== "closed").length;
+    html += `
+      <h3 style="margin:4px 0 8px;color:#0f3a2a;">${escapeHtml(monthLabel(thisMonth))} <span class="muted" style="font-weight:normal;font-size:13px;">· ${thisMonthQuotes.length} quote${thisMonthQuotes.length === 1 ? "" : "s"}${openCount ? ` · ${openCount} open` : ""}</span></h3>
+    `;
+    html += thisMonthQuotes.map(renderQuoteCardHtml).join("");
+  } else {
+    html += `
+      <h3 style="margin:4px 0 8px;color:#0f3a2a;">${escapeHtml(monthLabel(thisMonth))}</h3>
+      <p class="muted" style="margin-bottom:14px;">No quotes this month yet.</p>
+    `;
+  }
+
+  // Older months — collapsible cards
+  const olderKeys = [...olderByMonth.keys()].sort().reverse();
+  if (olderKeys.length) {
+    html += `<h3 style="margin:20px 0 8px;color:#0f3a2a;">Earlier Months</h3>`;
+    html += olderKeys.map(key => {
+      const quotes = olderByMonth.get(key);
+      const isExpanded = expandedQuoteMonths.has(key);
+      const arrow = isExpanded ? "▼" : "▶";
+      const total = quotes.reduce((s, q) => s + Number(q.grandTotal || 0), 0);
+      const openCount = quotes.filter(q => q.status !== "closed").length;
+      let monthBody = "";
+      if (isExpanded) {
+        monthBody = `<div class="archived-month-body">${quotes.map(renderQuoteCardHtml).join("")}</div>`;
+      }
+      return `
+        <div class="archived-month-card">
+          <button type="button" class="archived-month-header" data-toggle-qmonth="${escapeHtml(key)}">
+            <span style="font-size:18px;margin-right:8px;">${arrow}</span>
+            <strong style="font-size:16px;">${escapeHtml(monthLabel(key))}</strong>
+            <span class="muted" style="margin-left:auto;">${quotes.length} quote${quotes.length === 1 ? "" : "s"}${openCount ? ` · <strong style="color:#b45309;">${openCount} open</strong>` : ""} · ${money(total)}</span>
+          </button>
+          ${monthBody}
+        </div>
+      `;
+    }).join("");
+  }
+
+  container.innerHTML = html;
+
+  // Wire month-header toggles
+  container.querySelectorAll("button[data-toggle-qmonth]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const k = btn.dataset.toggleQmonth;
+      if (expandedQuoteMonths.has(k)) expandedQuoteMonths.delete(k);
+      else expandedQuoteMonths.add(k);
+      renderQuoteHistory();
+    });
+  });
+  wireQuoteCardButtons(container);
+}
 
 // ---------- QUOTE SEARCH tab -----------------------------------------------
 
@@ -1329,7 +1566,9 @@ function runQuoteSearch() {
     from: qs("qsFrom").value,
     to: qs("qsTo").value,
     minTotal: Number(qs("qsMinTotal").value || 0),
-    keyword: qs("qsKeyword").value.trim().toLowerCase()
+    keyword: qs("qsKeyword").value.trim().toLowerCase(),
+    status: qs("qsStatus") ? qs("qsStatus").value : "",
+    fexa: qs("qsFexa") ? qs("qsFexa").value.trim().toLowerCase() : ""
   };
 
   const results = [];
@@ -1337,6 +1576,10 @@ function runQuoteSearch() {
     if (filters.store && q.store !== filters.store) continue;
     if (filters.causedBy && q.causedBy !== filters.causedBy) continue;
     if (filters.user && q.createdBy !== filters.user && q.lastEditedBy !== filters.user) continue;
+    // Status defaults to "open" if the field isn't set on older quotes
+    const qStatus = q.status || "open";
+    if (filters.status && filters.status !== qStatus) continue;
+    if (filters.fexa && !(q.fexaWorkOrder || "").toLowerCase().includes(filters.fexa)) continue;
     // Racking Type: match quotes where ANY line item uses that racking type
     if (filters.rackingType) {
       const hasType = (q.items || []).some(it => it.rackingType === filters.rackingType);
@@ -1348,7 +1591,7 @@ function runQuoteSearch() {
     if (filters.minTotal > 0 && Number(q.grandTotal || 0) < filters.minTotal) continue;
     if (filters.keyword) {
       const hay = [
-        q.incident, q.notes, q.causedBy,
+        q.incident, q.notes, q.causedBy, q.fexaWorkOrder,
         q.otherDamage && q.otherDamage.description,
         q.otherDamage && q.otherDamage.contractorName
       ].filter(Boolean).join(" ").toLowerCase();
@@ -1426,27 +1669,39 @@ function renderQuoteSearchResults() {
   }
 
   if (!quoteSearchResults.length) {
-    body.innerHTML = `<tr><td colspan="11" class="muted" style="text-align:center;padding:20px;">No results. Set filters above and click Search.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="14" class="muted" style="text-align:center;padding:20px;">No results. Set filters above and click Search.</td></tr>`;
     return;
   }
 
-  body.innerHTML = quoteSearchResults.map(q => `
+  body.innerHTML = quoteSearchResults.map(q => {
+    const status = q.status === "closed" ? "closed" : "open";
+    const statusBadge = status === "closed"
+      ? `<span class="status-closed">CLOSED</span>`
+      : `<span class="status-open">OPEN</span>`;
+    const finalCostCell = (status === "closed" && typeof q.finalCost === "number")
+      ? money(q.finalCost)
+      : `<span class="muted">—</span>`;
+    return `
     <tr>
       <td>${q.quoteNumber ? `<span class="quote-num">${escapeHtml(q.quoteNumber)}</span>` : `<span class="muted">—</span>`}</td>
+      <td>${statusBadge}</td>
       <td>${escapeHtml(quoteDateIso(q) || q.date || "")}</td>
       <td>${escapeHtml(q.store || "—")}</td>
       <td>${escapeHtml(q.incident || "—")}</td>
       <td>${escapeHtml(q.causedBy || "—")}</td>
+      <td>${escapeHtml(q.fexaWorkOrder || "—")}</td>
       <td>${money(q.partsTotal || 0)}</td>
       <td>${money(q.laborTotal || 0)}</td>
       <td>${money(q.otherDamageCost || 0)}</td>
       <td><strong>${money(q.grandTotal || 0)}</strong></td>
+      <td>${finalCostCell}</td>
       <td>${escapeHtml(q.createdBy || "—")}</td>
       <td>
         <button type="button" data-qs-pdf="${escapeHtml(q.id)}">PDF</button>
       </td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 
   body.querySelectorAll("button[data-qs-pdf]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -1457,8 +1712,8 @@ function renderQuoteSearchResults() {
 }
 
 function clearQuoteSearch() {
-  ["qsStore", "qsCausedBy", "qsRackingType", "qsUser"].forEach(id => { const el = qs(id); if (el) el.value = ""; });
-  ["qsFrom", "qsTo", "qsMinTotal", "qsKeyword"].forEach(id => { const el = qs(id); if (el) el.value = ""; });
+  ["qsStore", "qsCausedBy", "qsRackingType", "qsUser", "qsStatus"].forEach(id => { const el = qs(id); if (el) el.value = ""; });
+  ["qsFrom", "qsTo", "qsMinTotal", "qsKeyword", "qsFexa"].forEach(id => { const el = qs(id); if (el) el.value = ""; });
   quoteSearchResults = [];
   renderQuoteSearchResults();
 }
@@ -1476,16 +1731,21 @@ function exportQuoteSearchToExcel() {
   // Sheet 1: Quote Summary (one row per quote)
   const summaryRows = quoteSearchResults.map(q => ({
     "Quote #": q.quoteNumber || "",
+    "Status": q.status === "closed" ? "CLOSED" : "OPEN",
     "Date": quoteDateIso(q) || q.date || "",
     "Store": q.store || "",
     "Incident": q.incident || "",
+    "FEXA WO": q.fexaWorkOrder || "",
     "Caused By": q.causedBy || "",
     "Parts Total": Number(q.partsTotal || 0),
     "Labor Total": Number(q.laborTotal || 0),
     "Other Damage": Number(q.otherDamageCost || 0),
     "Grand Total": Number(q.grandTotal || 0),
+    "Final Cost": (q.status === "closed" && typeof q.finalCost === "number") ? Number(q.finalCost) : "",
+    "Variance": (q.status === "closed" && typeof q.finalCost === "number") ? (Number(q.finalCost) - Number(q.grandTotal || 0)) : "",
     "Prepared By": q.createdBy || "",
     "Last Edited By": q.lastEditedBy || "",
+    "Closed By": q.closedBy || "",
     "Contractor": (q.otherDamage && q.otherDamage.contractorName) || "",
     "Other Damage Description": (q.otherDamage && q.otherDamage.description) || "",
     "Notes": q.notes || ""
@@ -1604,23 +1864,23 @@ function exportQuoteSearchToPdf() {
 
   doc.autoTable({
     startY: 40,
-    head: [["Quote #", "Date", "Store", "Incident", "Caused By", "Parts", "Labor", "Other", "Grand Total", "Prepared By"]],
+    head: [["Quote #", "Status", "Date", "Store", "Incident", "FEXA", "Caused By", "Grand Total", "Final Cost", "Prepared By"]],
     body: quoteSearchResults.map(q => [
       q.quoteNumber || "",
+      q.status === "closed" ? "CLOSED" : "OPEN",
       quoteDateIso(q) || q.date || "",
       q.store || "",
       q.incident || "",
+      q.fexaWorkOrder || "",
       q.causedBy || "",
-      money(q.partsTotal || 0),
-      money(q.laborTotal || 0),
-      money(q.otherDamageCost || 0),
       money(q.grandTotal || 0),
+      (q.status === "closed" && typeof q.finalCost === "number") ? money(q.finalCost) : "",
       q.createdBy || ""
     ]),
     headStyles: { fillColor: GREEN_DARK, textColor: YELLOW, fontStyle: "bold" },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     styles: { fontSize: 8, cellPadding: 2 },
-    columnStyles: { 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" }, 8: { halign: "right" } },
+    columnStyles: { 7: { halign: "right" }, 8: { halign: "right" } },
     margin: { left: 10, right: 10 }
   });
 
@@ -1707,6 +1967,10 @@ async function startSafety() {
   }
 
   // Quote Search wiring
+  // Quote History "Show Open Only" toggle
+  const showOpenCb = qs("quotesShowOpen");
+  if (showOpenCb) showOpenCb.addEventListener("change", renderQuoteHistory);
+
   const qsRunBtn = qs("qsRunBtn");
   if (qsRunBtn) qsRunBtn.addEventListener("click", runQuoteSearch);
   const qsClearBtn = qs("qsClearBtn");

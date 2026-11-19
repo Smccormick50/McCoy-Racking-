@@ -70,6 +70,10 @@
               <input id="estIncident" type="text" placeholder="e.g. Forklift hit upright 11/18">
             </label>
             <label>
+              FEXA Work Order # (optional)
+              <input id="estFexaWO" type="text" placeholder="e.g. FEXA-12345">
+            </label>
+            <label>
               Caused By (optional)
               <select id="estCausedBy">
                 <option value="">— Select cause —</option>
@@ -170,7 +174,16 @@
       <section id="tab-quotes" class="tab-panel">
         <div class="panel">
           <h2>Quote History <span class="live-badge">Live</span></h2>
-          <p class="muted">Every saved damage estimate. Click any quote to see its details and re-download the PDF.</p>
+          <p class="muted">
+            Current month's quotes appear on top. Older months collapse into cards you can expand.
+            Use the toggle below to flip to "Show Open Only" — shows every open quote regardless of date so you can see everything still needing follow-up.
+          </p>
+          <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="quotesShowOpen"> <strong>Show Open Only</strong>
+            </label>
+            <span class="muted" style="font-size:12px;">When off: monthly rollup view.</span>
+          </div>
           <div id="quoteHistoryContainer"></div>
         </div>
       </section>
@@ -214,6 +227,18 @@
             <label>
               Minimum Grand Total ($)
               <input id="qsMinTotal" type="number" min="0" step="0.01" placeholder="e.g. 5000">
+            </label>
+            <label>
+              Status
+              <select id="qsStatus">
+                <option value="">All</option>
+                <option value="open">Open only</option>
+                <option value="closed">Closed only</option>
+              </select>
+            </label>
+            <label>
+              FEXA WO # (contains)
+              <input id="qsFexa" type="text" placeholder="e.g. FEXA-12345">
             </label>
             <label class="wide">
               Keyword (searches description, notes, incident, contractor)
@@ -288,14 +313,17 @@
               <thead>
                 <tr>
                   <th>Quote #</th>
+                  <th>Status</th>
                   <th>Date</th>
                   <th>Store</th>
                   <th>Incident</th>
                   <th>Caused By</th>
+                  <th>FEXA WO</th>
                   <th>Parts</th>
                   <th>Labor</th>
                   <th>Other</th>
                   <th>Grand Total</th>
+                  <th>Final Cost</th>
                   <th>Prepared By</th>
                   <th>Action</th>
                 </tr>

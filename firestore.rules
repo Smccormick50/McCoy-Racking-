@@ -29,13 +29,15 @@ service cloud.firestore {
         && userDoc().role == "admin";
     }
 
-    // Risk & Safety access: admins always have it, "safety" role users have it,
-    // and any other user has it when their profile sets safetyAccess == true.
+    // Risk & Safety access:
+    //   - "safety" role users always have it
+    //   - "admin" users have it UNLESS their profile explicitly sets safetyAccess == false
+    //   - everyone else needs safetyAccess == true
     function hasSafetyAccess() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && (userDoc().role == "admin"
-            || userDoc().role == "safety"
+        && (userDoc().role == "safety"
+            || (userDoc().role == "admin" && userDoc().safetyAccess != false)
             || userDoc().safetyAccess == true);
     }
 

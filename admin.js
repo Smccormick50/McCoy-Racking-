@@ -432,9 +432,20 @@ function renderUserAccessTable() {
   }
   body.innerHTML = adminState.userProfiles.map(u => {
     const role = u.role || "warehouse";
-    const safetyChecked = (role === "admin" || role === "safety" || !!u.safetyAccess) ? "checked" : "";
-    // Admins and safety-role users always have R&S access — lock the box so it can't be turned off
-    const safetyLocked = (role === "admin" || role === "safety");
+    // Admins default to true (have access) unless safetyAccess is explicitly false.
+    // Safety-role users always have access.
+    // Warehouse users have access only when safetyAccess === true.
+    let safetyChecked;
+    if (role === "safety") safetyChecked = true;
+    else if (role === "admin") safetyChecked = u.safetyAccess !== false;
+    else safetyChecked = u.safetyAccess === true;
+
+    // Lock the box only for safety-role users (who always need it to be on).
+    // Admins can be denied explicitly; warehouse users can be granted.
+    const safetyLocked = (role === "safety");
+    const safetyTitle = role === "safety"
+      ? "title='Safety-role users always have access'"
+      : (role === "admin" ? "title='Uncheck to deny Risk & Safety access for this admin'" : "");
     return `
       <tr data-uid="${escapeHtml(u.uid)}">
         <td><strong>${escapeHtml(u.displayName || "—")}</strong></td>
@@ -447,7 +458,7 @@ function renderUserAccessTable() {
           </select>
         </td>
         <td style="text-align:center;">
-          <input type="checkbox" class="ua-safety" ${safetyChecked} ${safetyLocked ? "disabled title='Admins and safety-role users always have access'" : ""}>
+          <input type="checkbox" class="ua-safety" ${safetyChecked ? "checked" : ""} ${safetyLocked ? "disabled" : ""} ${safetyTitle}>
         </td>
         <td class="muted" style="font-size:11px;font-family:monospace;">${escapeHtml(u.uid)}</td>
       </tr>
@@ -505,15 +516,24 @@ async function saveUserSafetyAccess(uid, checkbox) {
   if (!requireAdminUser()) { renderUserAccessTable(); return; }
   const u = adminState.userProfiles.find(x => x.uid === uid);
   if (!u) return;
-  const oldValue = !!u.safetyAccess;
+  const role = u.role || "warehouse";
   const newValue = !!checkbox.checked;
-  if (newValue === oldValue) return;
+
+  // Warn if an admin is revoking their own R&S access (not fatal, just informational)
+  if (currentUserProfile && currentUserProfile.uid === uid && !newValue && role === "admin") {
+    if (!confirm(`WARNING: You're turning OFF your own Risk & Safety access.\n\nAfter refresh, you'll lose access to the Risk & Safety page.\nYou'll still have full admin access to re-grant it.\n\nProceed?`)) {
+      renderUserAccessTable();
+      return;
+    }
+  }
+
   try {
     await db.collection("users").doc(uid).set({ safetyAccess: newValue }, { merge: true });
     await recordAudit("CHANGE_USER_SAFETY_ACCESS", u.displayName || u.email || uid, {
-      uid, before: oldValue, after: newValue
+      uid, role, before: u.safetyAccess, after: newValue
     });
-    showAdminMessage(`Risk & Safety access ${newValue ? "GRANTED to" : "REVOKED from"} ${u.displayName || u.email}.`, false);
+    const verb = (role === "admin" && !newValue) ? "REVOKED from admin" : (newValue ? "GRANTED to" : "REVOKED from");
+    showAdminMessage(`Risk & Safety access ${verb} ${u.displayName || u.email}.`, false);
   } catch (err) {
     console.error("Change safety access failed:", err);
     showAdminMessage("Change failed: " + err.message, true);

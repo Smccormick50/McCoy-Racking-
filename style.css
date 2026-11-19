@@ -1351,3 +1351,71 @@ input.cell-edit:focus {
   font-weight: bold;
   letter-spacing: 0.5px;
 }
+
+/* Status badges on quote cards */
+.status-open {
+  display: inline-block;
+  background: #b45309;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-right: 6px;
+}
+.status-closed {
+  display: inline-block;
+  background: #166b46;
+  color: #f5d116;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-right: 6px;
+}
+.quote-card-closed {
+  opacity: 0.85;
+  background: #f8fafc;
+}
+.fexa-badge {
+  display: inline-block;
+  background: #0f3a2a;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: normal;
+  margin: 0 2px;
+}
+
+/* Close / Re-open buttons on quote cards */
+.quote-card-close {
+  padding: 0 14px;
+  border-radius: 0;
+  background: #b45309;
+  color: white;
+  font-weight: bold;
+  border: 0;
+  border-left: 1px solid #e2e8f0;
+  cursor: pointer;
+  font-size: 13px;
+}
+.quote-card-close:hover {
+  background: #92400e;
+}
+.quote-card-reopen {
+  padding: 0 14px;
+  border-radius: 0;
+  background: white;
+  color: #0f3a2a;
+  font-weight: bold;
+  border: 0;
+  border-left: 1px solid #e2e8f0;
+  cursor: pointer;
+  font-size: 13px;
+}
+.quote-card-reopen:hover {
+  background: #f1f5f9;
+}

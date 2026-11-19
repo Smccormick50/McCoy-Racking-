@@ -57,8 +57,18 @@ async function ensureUserApproved(opts) {
   }
 
   const role = profile.role || "warehouse";
-  // Admins always have safety access. "safety" role users ARE safety-only. Others need the flag.
-  const hasSafetyAccess = role === "admin" || role === "safety" || !!profile.safetyAccess;
+  // Risk & Safety access:
+  // - "safety" role users always have it (it's their only access).
+  // - Admins get it by default UNLESS their profile explicitly sets safetyAccess === false.
+  // - Everyone else (warehouse) needs safetyAccess === true explicitly.
+  let hasSafetyAccess;
+  if (role === "safety") {
+    hasSafetyAccess = true;
+  } else if (role === "admin") {
+    hasSafetyAccess = profile.safetyAccess !== false; // default true, but admin can be explicitly denied
+  } else {
+    hasSafetyAccess = profile.safetyAccess === true;
+  }
   const isSafetyOnly = role === "safety";
 
   currentUserProfile = {
