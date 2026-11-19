@@ -46,9 +46,11 @@ function getAdminUser() {
   return (currentUserProfile && currentUserProfile.displayName) || "";
 }
 
+// On the Risk & Safety page, anyone with safety access can save/edit quotes —
+// admins, safety-role users, and warehouse users whose profile has safetyAccess=true.
 function requireAdminUser() {
-  if (!currentUserProfile || !currentUserProfile.isAdmin) {
-    showAdminMessage("Admin access required.", true);
+  if (!currentUserProfile || !currentUserProfile.hasSafetyAccess) {
+    showAdminMessage("Risk & Safety access required.", true);
     return false;
   }
   return true;
@@ -572,7 +574,12 @@ function setEstimateEditMode(quoteId, originalQuote) {
   const saveBtn = qs("estSaveAndDownloadBtn");
   if (quoteId) {
     if (banner) banner.style.display = "";
-    if (bannerId) bannerId.textContent = `#${String(quoteId).substring(0, 12)}`;
+    if (bannerId) {
+      const label = (originalQuote && originalQuote.quoteNumber)
+        ? originalQuote.quoteNumber
+        : `#${String(quoteId).substring(0, 12)}`;
+      bannerId.textContent = label;
+    }
     if (saveBtn) saveBtn.textContent = "Update Quote & Download PDF";
   } else {
     if (banner) banner.style.display = "none";
@@ -727,7 +734,10 @@ async function handleEstimateSaveAndDownload() {
       ? db.collection("quotes").doc(estEditingQuoteId)
       : db.collection("quotes").doc();
     const quoteId = ref.id;
-    const payload = {
+    const counterRef = db.collection("meta").doc("counters");
+
+    // Build the base payload (quoteNumber decided inside the transaction for new quotes)
+    const basePayload = {
       quoteId,
       date: est.date,
       store: est.store,
@@ -748,35 +758,63 @@ async function handleEstimateSaveAndDownload() {
     };
 
     if (isEdit) {
-      // Preserve original createdBy/createdAt; add lastEditedBy/lastEditedAt
-      payload.createdBy = (estEditingOriginal && estEditingOriginal.createdBy) || user;
-      payload.createdAt = (estEditingOriginal && estEditingOriginal.createdAt) || now;
-      payload.lastEditedBy = user;
-      payload.lastEditedAt = now;
+      // Preserve original createdBy/createdAt/quoteNumber; add lastEditedBy/lastEditedAt
+      basePayload.createdBy = (estEditingOriginal && estEditingOriginal.createdBy) || user;
+      basePayload.createdAt = (estEditingOriginal && estEditingOriginal.createdAt) || now;
+      basePayload.lastEditedBy = user;
+      basePayload.lastEditedAt = now;
+      // Keep the same human-readable quote number on edit
+      if (estEditingOriginal && estEditingOriginal.quoteNumber) {
+        basePayload.quoteNumber = estEditingOriginal.quoteNumber;
+      }
     } else {
-      payload.createdBy = user;
-      payload.createdAt = now;
+      basePayload.createdBy = user;
+      basePayload.createdAt = now;
     }
 
-    // Check total payload size — Firestore limit is ~1MB per doc
-    const estSize = JSON.stringify(payload).length;
+    // Size check — Firestore caps docs at 1MB
+    const estSize = JSON.stringify(basePayload).length;
     if (estSize > 950 * 1024) {
       throw new Error(`Quote too large (~${Math.round(estSize/1024)}KB). Firestore caps documents at 1MB. Remove a photo or use smaller ones and try again.`);
     }
-    await ref.set(payload);
+
+    // For NEW quotes, atomically read+increment the counter inside a transaction
+    // so no two quotes can collide on the same number if saved simultaneously.
+    let finalPayload;
+    if (isEdit) {
+      await ref.set(basePayload);
+      finalPayload = basePayload;
+    } else {
+      finalPayload = await db.runTransaction(async tx => {
+        const counterDoc = await tx.get(counterRef);
+        // Seed at 7401 if the field doesn't exist yet
+        const current = (counterDoc.exists && Number(counterDoc.data().nextQuoteNumber))
+          ? Number(counterDoc.data().nextQuoteNumber)
+          : 7401;
+        const quoteNumber = `Q-${current}`;
+        const payload = Object.assign({}, basePayload, { quoteNumber });
+        tx.set(counterRef, { nextQuoteNumber: current + 1 }, { merge: true });
+        tx.set(ref, payload);
+        return payload;
+      });
+    }
+
     await recordAudit(
       isEdit ? "EDIT_DAMAGE_ESTIMATE" : "CREATE_DAMAGE_ESTIMATE",
       est.store,
       {
         quoteId,
+        quoteNumber: finalPayload.quoteNumber || "",
         grandTotal: est.grandTotal,
         previousGrandTotal: isEdit && estEditingOriginal ? estEditingOriginal.grandTotal : undefined
       }
     );
 
     // Build and download PDF right away
-    buildAndDownloadEstimatePdf(Object.assign({}, payload, { quoteId }));
-    showAdminMessage(isEdit ? `Quote updated. PDF downloaded.` : `Quote saved. PDF downloaded.`, false);
+    buildAndDownloadEstimatePdf(Object.assign({}, finalPayload, { quoteId }));
+    showAdminMessage(isEdit
+      ? `Quote ${finalPayload.quoteNumber || quoteId.substring(0, 8)} updated. PDF downloaded.`
+      : `Quote ${finalPayload.quoteNumber} saved. PDF downloaded.`, false);
     clearEstimateForm();
   } catch (err) {
     console.error("Save quote failed:", err);
@@ -855,7 +893,12 @@ function buildAndDownloadEstimatePdf(quote) {
     doc.text(value, 50, metaY);
     metaY += 10;
   };
-  metaRow("ESTIMATE #", quote.quoteId === "DRAFT" ? "DRAFT (not saved)" : String(quote.quoteId).substring(0, 12));
+  // Prefer the human-readable quote number (Q-7401, etc.) when it exists.
+  // Fall back to a shortened Firestore ID for older quotes that pre-date the counter.
+  const estNumDisplay = quote.quoteId === "DRAFT"
+    ? "DRAFT (not saved)"
+    : (quote.quoteNumber || String(quote.quoteId).substring(0, 12));
+  metaRow("ESTIMATE #", estNumDisplay);
   metaRow("DATE", formatDate(quote.date) || quote.date || "");
   if (quote.incident) metaRow("INCIDENT", String(quote.incident));
   if (quote.causedBy) metaRow("CAUSED BY", String(quote.causedBy));
@@ -1056,10 +1099,12 @@ function buildAndDownloadEstimatePdf(quote) {
   doc.text("McCoy's Risk and Safety - McCoy Corporation Headquarters - 1350 N I.H. 35, San Marcos, TX 78666",
     PAGE_W / 2, doc.internal.pageSize.getHeight() - 8, { align: "center" });
 
-  // Filename: Estimate-YYYY-MM-DD-Store-QuoteIDFragment.pdf
+  // Filename: Estimate-Q-7401-YYYY-MM-DD-Store.pdf (uses the human-readable quote # when available)
   const safe = s => String(s || "").replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  const fragId = quote.quoteId === "DRAFT" ? "DRAFT" : String(quote.quoteId).substring(0, 8);
-  const parts = ["Estimate", quote.date, safe(quote.store), fragId].filter(Boolean);
+  const fragId = quote.quoteId === "DRAFT"
+    ? "DRAFT"
+    : (quote.quoteNumber || String(quote.quoteId).substring(0, 8));
+  const parts = ["Estimate", safe(fragId), quote.date, safe(quote.store)].filter(Boolean);
   const filename = parts.join("-") + ".pdf";
 
   // If a contractor PDF is attached, merge its pages onto the end using pdf-lib.
@@ -1119,7 +1164,8 @@ function renderQuoteHistory() {
   container.innerHTML = sorted.map(q => {
     const isOpen = expandedQuotes.has(q.id);
     const arrow = isOpen ? "▼" : "▶";
-    const header = `${escapeHtml(q.date || "")} — ${escapeHtml(q.store || "")}${q.incident ? ` — ${escapeHtml(q.incident)}` : ""}${q.causedBy ? ` <span class="muted">(${escapeHtml(q.causedBy)})</span>` : ""}`;
+    const prefix = q.quoteNumber ? `<span class="quote-num">${escapeHtml(q.quoteNumber)}</span> · ` : "";
+    const header = `${prefix}${escapeHtml(q.date || "")} — ${escapeHtml(q.store || "")}${q.incident ? ` — ${escapeHtml(q.incident)}` : ""}${q.causedBy ? ` <span class="muted">(${escapeHtml(q.causedBy)})</span>` : ""}`;
     const itemCount = (q.items || []).length;
     const laborCount = (q.laborLines || []).length;
 
@@ -1380,12 +1426,13 @@ function renderQuoteSearchResults() {
   }
 
   if (!quoteSearchResults.length) {
-    body.innerHTML = `<tr><td colspan="10" class="muted" style="text-align:center;padding:20px;">No results. Set filters above and click Search.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="11" class="muted" style="text-align:center;padding:20px;">No results. Set filters above and click Search.</td></tr>`;
     return;
   }
 
   body.innerHTML = quoteSearchResults.map(q => `
     <tr>
+      <td>${q.quoteNumber ? `<span class="quote-num">${escapeHtml(q.quoteNumber)}</span>` : `<span class="muted">—</span>`}</td>
       <td>${escapeHtml(quoteDateIso(q) || q.date || "")}</td>
       <td>${escapeHtml(q.store || "—")}</td>
       <td>${escapeHtml(q.incident || "—")}</td>
@@ -1428,6 +1475,7 @@ function exportQuoteSearchToExcel() {
 
   // Sheet 1: Quote Summary (one row per quote)
   const summaryRows = quoteSearchResults.map(q => ({
+    "Quote #": q.quoteNumber || "",
     "Date": quoteDateIso(q) || q.date || "",
     "Store": q.store || "",
     "Incident": q.incident || "",
@@ -1445,7 +1493,7 @@ function exportQuoteSearchToExcel() {
   // Totals row
   summaryRows.push({});
   summaryRows.push({
-    "Date": "TOTAL",
+    "Quote #": "TOTAL",
     "Parts Total": quoteSearchResults.reduce((s, q) => s + Number(q.partsTotal || 0), 0),
     "Labor Total": quoteSearchResults.reduce((s, q) => s + Number(q.laborTotal || 0), 0),
     "Other Damage": quoteSearchResults.reduce((s, q) => s + Number(q.otherDamageCost || 0), 0),
@@ -1454,7 +1502,7 @@ function exportQuoteSearchToExcel() {
 
   const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
   wsSummary["!cols"] = [
-    { wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 18 },
+    { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 18 },
     { wch: 11 }, { wch: 11 }, { wch: 12 }, { wch: 12 },
     { wch: 18 }, { wch: 18 }, { wch: 20 }, { wch: 40 }, { wch: 40 }
   ];
@@ -1465,6 +1513,7 @@ function exportQuoteSearchToExcel() {
     const items = Array.isArray(q.items) ? q.items : [];
     for (const it of items) {
       lineRows.push({
+        "Quote #": q.quoteNumber || "",
         "Date": quoteDateIso(q) || q.date || "",
         "Store": q.store || "",
         "Caused By": q.causedBy || "",
@@ -1480,6 +1529,7 @@ function exportQuoteSearchToExcel() {
     const labors = Array.isArray(q.laborLines) ? q.laborLines : [];
     for (const l of labors) {
       lineRows.push({
+        "Quote #": q.quoteNumber || "",
         "Date": quoteDateIso(q) || q.date || "",
         "Store": q.store || "",
         "Caused By": q.causedBy || "",
@@ -1494,7 +1544,7 @@ function exportQuoteSearchToExcel() {
   }
   const wsLines = XLSX.utils.json_to_sheet(lineRows);
   wsLines["!cols"] = [
-    { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 10 },
+    { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 18 }, { wch: 10 },
     { wch: 18 }, { wch: 50 }, { wch: 10 }, { wch: 11 }, { wch: 12 }
   ];
 
@@ -1554,8 +1604,9 @@ function exportQuoteSearchToPdf() {
 
   doc.autoTable({
     startY: 40,
-    head: [["Date", "Store", "Incident", "Caused By", "Parts", "Labor", "Other", "Grand Total", "Prepared By"]],
+    head: [["Quote #", "Date", "Store", "Incident", "Caused By", "Parts", "Labor", "Other", "Grand Total", "Prepared By"]],
     body: quoteSearchResults.map(q => [
+      q.quoteNumber || "",
       quoteDateIso(q) || q.date || "",
       q.store || "",
       q.incident || "",
@@ -1569,7 +1620,7 @@ function exportQuoteSearchToPdf() {
     headStyles: { fillColor: GREEN_DARK, textColor: YELLOW, fontStyle: "bold" },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     styles: { fontSize: 8, cellPadding: 2 },
-    columnStyles: { 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" } },
+    columnStyles: { 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" }, 8: { halign: "right" } },
     margin: { left: 10, right: 10 }
   });
 
@@ -1587,7 +1638,7 @@ async function startSafety() {
   setConnectionStatus("Connecting...", "");
 
   try {
-    await ensureUserApproved({ adminOnly: true });
+    await ensureUserApproved({ safetyPage: true });
   } catch (err) {
     // ensureUserApproved already redirected or showed an overlay
     return;

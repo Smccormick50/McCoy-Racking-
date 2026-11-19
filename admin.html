@@ -38,6 +38,7 @@
     <nav class="admin-tabs">
       <button type="button" class="tab-btn active" data-tab="parts">Parts / Inventory</button>
       <button type="button" class="tab-btn" data-tab="users">Users</button>
+      <button type="button" class="tab-btn" data-tab="userAccess">User Access</button>
       <button type="button" class="tab-btn" data-tab="locations">Store Locations</button>
       <button type="button" class="tab-btn" data-tab="trucks">Trucks</button>
       <button type="button" class="tab-btn" data-tab="truckInv">Truck Inventory</button>
@@ -116,6 +117,35 @@
           <h2>All Users</h2>
           <p class="muted">These names appear in the User dropdown on the main site.</p>
           <ul id="adminUsersList" class="admin-list"></ul>
+        </div>
+      </section>
+
+      <!-- USER ACCESS tab -->
+      <section id="tab-userAccess" class="tab-panel">
+        <div class="panel">
+          <h2>User Access <span class="live-badge">Live</span></h2>
+          <p class="muted">
+            Control who can sign into Admin, Warehouse, and Risk &amp; Safety pages.
+            <br><strong>Role</strong>: <code>admin</code> = full access · <code>warehouse</code> = main inventory page · <code>safety</code> = Risk &amp; Safety page only.
+            <br><strong>Risk &amp; Safety Access</strong>: grants a warehouse user the extra Risk &amp; Safety button on the main page. Admins and safety-role users always have it.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Risk &amp; Safety Access</th>
+                  <th>UID</th>
+                </tr>
+              </thead>
+              <tbody id="adminUserAccessBody"></tbody>
+            </table>
+          </div>
+          <p class="muted" style="font-size:12px;margin-top:10px;">
+            To ADD a new user: create their account in Firebase Console → Authentication, then come back here and give them a role + display name. They'll appear in this table as soon as a profile doc is created for their UID. Instructions: Firebase Console → Firestore → <code>users</code> collection → <strong>Add document</strong> with the user's UID as the document ID and fields <code>email</code>, <code>displayName</code>, <code>role</code>.
+          </p>
         </div>
       </section>
 

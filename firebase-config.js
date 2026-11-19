@@ -57,17 +57,36 @@ async function ensureUserApproved(opts) {
   }
 
   const role = profile.role || "warehouse";
+  // Admins always have safety access. "safety" role users ARE safety-only. Others need the flag.
+  const hasSafetyAccess = role === "admin" || role === "safety" || !!profile.safetyAccess;
+  const isSafetyOnly = role === "safety";
+
   currentUserProfile = {
     uid: user.uid,
     email: user.email,
     displayName: profile.displayName || (user.email ? user.email.split("@")[0] : "User"),
     role,
-    isAdmin: role === "admin"
+    isAdmin: role === "admin",
+    hasSafetyAccess,
+    isSafetyOnly
   };
+
+  // Safety-only users can't reach admin pages or the main inventory page.
+  // Bounce them to safety.html unless this IS safety.html.
+  if (isSafetyOnly && !opts.safetyPage) {
+    window.location.href = "safety.html";
+    throw new Error("Safety-only user — redirecting");
+  }
 
   if (opts.adminOnly && role !== "admin") {
     showNotAdminScreen();
     throw new Error("Not an admin");
+  }
+
+  // The safety.html page requires safety access specifically (admins or safetyAccess=true or role=safety).
+  if (opts.safetyPage && !hasSafetyAccess) {
+    showNoSafetyAccessScreen();
+    throw new Error("No Risk & Safety access");
   }
 
   return currentUserProfile;
@@ -88,6 +107,19 @@ function showNotAdminScreen() {
   const overlay = buildOverlay(`
     <h1>Admin Only</h1>
     <p>The admin page is only available to administrator accounts.</p>
+    <p class="muted">Signed in as <strong>${escapeForHtml((currentUserProfile && currentUserProfile.email) || "")}</strong></p>
+    <a href="index.html" class="btn-like">← Back to main site</a>
+    <button id="authSignOutBtn" type="button" style="margin-top:10px;">Sign Out</button>
+  `);
+  document.body.appendChild(overlay);
+  document.getElementById("authSignOutBtn").addEventListener("click", signOutAndGoToLogin);
+}
+
+function showNoSafetyAccessScreen() {
+  const overlay = buildOverlay(`
+    <h1>Risk &amp; Safety Access Required</h1>
+    <p>Your account doesn't have access to the Risk &amp; Safety page.</p>
+    <p class="muted">Ask an administrator to turn on Risk &amp; Safety access for your account from the Admin &rarr; User Access tab.</p>
     <p class="muted">Signed in as <strong>${escapeForHtml((currentUserProfile && currentUserProfile.email) || "")}</strong></p>
     <a href="index.html" class="btn-like">← Back to main site</a>
     <button id="authSignOutBtn" type="button" style="margin-top:10px;">Sign Out</button>

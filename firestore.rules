@@ -29,6 +29,16 @@ service cloud.firestore {
         && userDoc().role == "admin";
     }
 
+    // Risk & Safety access: admins always have it, "safety" role users have it,
+    // and any other user has it when their profile sets safetyAccess == true.
+    function hasSafetyAccess() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (userDoc().role == "admin"
+            || userDoc().role == "safety"
+            || userDoc().safetyAccess == true);
+    }
+
     function onlyQuantityChange() {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly(['currentQuantity', 'updatedAt']);
     }
@@ -104,10 +114,12 @@ service cloud.firestore {
     }
 
     // Damage repair estimates / quotes.
-    // Read: anyone signed in. Write/delete: admins only.
+    // Read: anyone signed in. Write: users with Risk & Safety access.
+    // Delete: admins only (so safety users can't permanently erase quote history).
     match /quotes/{quoteId} {
       allow read: if signedIn();
-      allow create, update, delete: if isAdmin();
+      allow create, update: if hasSafetyAccess();
+      allow delete: if isAdmin();
     }
   }
 }

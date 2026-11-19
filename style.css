@@ -1339,3 +1339,15 @@ input.cell-edit:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* Quote number badge on Quote History cards and in search results */
+.quote-num {
+  display: inline-block;
+  background: #0f3a2a;
+  color: #f5d116;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}

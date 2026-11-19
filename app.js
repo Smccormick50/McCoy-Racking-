@@ -94,12 +94,13 @@ function configureHeaderForRole() {
     if (adminLink) adminLink.style.display = "";
     if (safetyLink) safetyLink.style.display = "";
   } else {
-    // Warehouse: show dropdown, hide admin + safety links
+    // Warehouse: show dropdown, hide admin link
     select.style.display = "";
     label.style.display = "";
     signedInAs.style.display = "none";
     if (adminLink) adminLink.style.display = "none";
-    if (safetyLink) safetyLink.style.display = "none";
+    // Show R&S link only for warehouse users who have the safetyAccess flag
+    if (safetyLink) safetyLink.style.display = currentUserProfile.hasSafetyAccess ? "" : "none";
   }
 }
 

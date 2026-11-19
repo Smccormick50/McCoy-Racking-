@@ -4,6 +4,7 @@
 let adminState = {
   parts: [],
   users: [],
+  userProfiles: [],   // Firebase Auth user profiles from users/{uid} — for the User Access tab
   locations: [],
   trucks: [],
   truckInventory: [],
@@ -107,6 +108,17 @@ function attachAdminListeners() {
   db.collection("settings").doc("users").onSnapshot(doc => {
     adminState.users = (doc.exists && Array.isArray(doc.data().list)) ? doc.data().list.slice() : [];
     renderUsersList();
+  });
+
+  // Firebase Auth user profiles — drives the User Access tab
+  db.collection("users").onSnapshot(snap => {
+    adminState.userProfiles = [];
+    snap.forEach(d => adminState.userProfiles.push({ uid: d.id, ...d.data() }));
+    adminState.userProfiles.sort((a, b) =>
+      (a.displayName || a.email || "").localeCompare(b.displayName || b.email || ""));
+    renderUserAccessTable();
+  }, err => {
+    console.error("Users listener error:", err);
   });
 
   db.collection("settings").doc("locations").onSnapshot(doc => {
@@ -406,6 +418,106 @@ async function removeUser(name) {
   } catch (err) {
     console.error("Remove user failed:", err);
     showAdminMessage("Remove failed: " + err.message, true);
+  }
+}
+
+// ---------- USER ACCESS tab (Firebase Auth profiles) -----------------------
+
+function renderUserAccessTable() {
+  const body = qs("adminUserAccessBody");
+  if (!body) return;
+  if (!adminState.userProfiles.length) {
+    body.innerHTML = `<tr><td colspan="5" class="muted" style="text-align:center;padding:20px;">No user profiles found yet. Profiles are created at <code>users/{uid}</code> in Firestore when someone first signs in.</td></tr>`;
+    return;
+  }
+  body.innerHTML = adminState.userProfiles.map(u => {
+    const role = u.role || "warehouse";
+    const safetyChecked = (role === "admin" || role === "safety" || !!u.safetyAccess) ? "checked" : "";
+    // Admins and safety-role users always have R&S access — lock the box so it can't be turned off
+    const safetyLocked = (role === "admin" || role === "safety");
+    return `
+      <tr data-uid="${escapeHtml(u.uid)}">
+        <td><strong>${escapeHtml(u.displayName || "—")}</strong></td>
+        <td class="muted" style="font-size:13px;">${escapeHtml(u.email || "—")}</td>
+        <td>
+          <select class="ua-role">
+            <option value="admin" ${role === "admin" ? "selected" : ""}>admin</option>
+            <option value="warehouse" ${role === "warehouse" ? "selected" : ""}>warehouse</option>
+            <option value="safety" ${role === "safety" ? "selected" : ""}>safety</option>
+          </select>
+        </td>
+        <td style="text-align:center;">
+          <input type="checkbox" class="ua-safety" ${safetyChecked} ${safetyLocked ? "disabled title='Admins and safety-role users always have access'" : ""}>
+        </td>
+        <td class="muted" style="font-size:11px;font-family:monospace;">${escapeHtml(u.uid)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  // Wire change handlers
+  body.querySelectorAll("tr[data-uid]").forEach(tr => {
+    const uid = tr.dataset.uid;
+    const roleSel = tr.querySelector(".ua-role");
+    const safetyCb = tr.querySelector(".ua-safety");
+    if (roleSel) roleSel.addEventListener("change", () => saveUserRole(uid, roleSel));
+    if (safetyCb) safetyCb.addEventListener("change", () => saveUserSafetyAccess(uid, safetyCb));
+  });
+}
+
+async function saveUserRole(uid, select) {
+  if (!requireAdminUser()) { renderUserAccessTable(); return; }
+  const u = adminState.userProfiles.find(x => x.uid === uid);
+  if (!u) return;
+  const oldRole = u.role || "warehouse";
+  const newRole = select.value;
+  if (newRole === oldRole) return;
+
+  // Guard against locking yourself out of admin
+  if (currentUserProfile && currentUserProfile.uid === uid && newRole !== "admin") {
+    if (!confirm(`WARNING: You're changing your OWN role from admin to "${newRole}".\n\nIf you confirm, you'll lose access to this page the next time you refresh. Proceed?`)) {
+      renderUserAccessTable();
+      return;
+    }
+  } else {
+    if (!confirm(`Change role for ${u.displayName || u.email}?\n\n${oldRole} → ${newRole}\n\n` +
+      (newRole === "safety" ? "Note: safety-role users see ONLY the Risk & Safety page.\n\n" : "") +
+      (newRole === "admin" ? "Note: admins have full access including delete permissions.\n\n" : "") +
+      "Proceed?")) {
+      renderUserAccessTable();
+      return;
+    }
+  }
+
+  try {
+    await db.collection("users").doc(uid).set({ role: newRole }, { merge: true });
+    await recordAudit("CHANGE_USER_ROLE", u.displayName || u.email || uid, {
+      uid, before: oldRole, after: newRole
+    });
+    showAdminMessage(`Role updated for ${u.displayName || u.email}: ${oldRole} → ${newRole}`, false);
+  } catch (err) {
+    console.error("Change role failed:", err);
+    showAdminMessage("Change role failed: " + err.message, true);
+    renderUserAccessTable();
+  }
+}
+
+async function saveUserSafetyAccess(uid, checkbox) {
+  if (!requireAdminUser()) { renderUserAccessTable(); return; }
+  const u = adminState.userProfiles.find(x => x.uid === uid);
+  if (!u) return;
+  const oldValue = !!u.safetyAccess;
+  const newValue = !!checkbox.checked;
+  if (newValue === oldValue) return;
+  try {
+    await db.collection("users").doc(uid).set({ safetyAccess: newValue }, { merge: true });
+    await recordAudit("CHANGE_USER_SAFETY_ACCESS", u.displayName || u.email || uid, {
+      uid, before: oldValue, after: newValue
+    });
+    showAdminMessage(`Risk & Safety access ${newValue ? "GRANTED to" : "REVOKED from"} ${u.displayName || u.email}.`, false);
+  } catch (err) {
+    console.error("Change safety access failed:", err);
+    showAdminMessage("Change failed: " + err.message, true);
+    renderUserAccessTable();
   }
 }
 
